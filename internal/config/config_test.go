@@ -901,6 +901,219 @@ func TestPromptEOFWithPartialLine(t *testing.T) {
 	}
 }
 
+// TestYearSpecRaw drives every arm of yearSpecRaw, the inverse of ParseYearSpec, so
+// a scaffolded year token round-trips back to the same YearSpec. The zero-value case
+// proves the default arm folds any unrecognized/zero spec to the safe "git" token
+// rather than an empty string that would round-trip into a parse error.
+func TestYearSpecRaw(t *testing.T) {
+	tests := []struct {
+		name string
+		spec model.YearSpec
+		want string
+	}{
+		{"current", model.YearSpec{Kind: model.YearCurrent}, "current"},
+		{"explicit", model.YearSpec{Kind: model.YearExplicit, Start: 2026}, "2026"},
+		{"range", model.YearSpec{Kind: model.YearRange, Start: 2021, End: 2026}, "2021-2026"},
+		{"git (the default arm)", model.YearSpec{Kind: model.YearGit}, "git"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := yearSpecRaw(tt.spec)
+			if got != tt.want {
+				t.Errorf("yearSpecRaw(%+v) = %q, want %q", tt.spec, got, tt.want)
+			}
+			// Each token must round-trip back through ParseYearSpec to the same spec,
+			// proving render/parse are true inverses for the picker's tokens.
+			rt, err := ParseYearSpec(got)
+			if err != nil {
+				t.Fatalf("ParseYearSpec(%q) round-trip error: %v", got, err)
+			}
+			if rt != tt.spec {
+				t.Errorf("round-trip %q = %+v, want %+v", got, rt, tt.spec)
+			}
+		})
+	}
+}
+
+// TestRenderFile confirms RenderFile produces bytes that decode back through LoadFile
+// to the same effective fields, and that the policy block is emitted only when the
+// config actually carries policy intent (so a freshly scaffolded file is not
+// cluttered with an empty policy the user never set).
+func TestRenderFile(t *testing.T) {
+	t.Run("round-trips through LoadFile with policy", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.License = "AGPL-3.0-or-later"
+		cfg.Holder = "Kingsrook, LLC"
+		cfg.Year = model.YearSpec{Kind: model.YearRange, Start: 2021, End: 2026}
+		cfg.Style = model.StyleNotice
+		cfg.ManageLicenseFile = false
+		cfg.Excludes = []string{"**/generated/**"}
+		cfg.Policy = model.Policy{
+			Required: "AGPL-3.0-or-later",
+			Allow:    []string{"AGPL-3.0-or-later", "MIT"},
+			Deny:     []string{"GPL-2.0-only"},
+			FailOn:   []model.FailCondition{model.FailOnMissingHeader, model.FailOnUnknownLicense},
+		}
+
+		data, err := RenderFile(cfg)
+		if err != nil {
+			t.Fatalf("RenderFile error: %v", err)
+		}
+
+		// Decode the rendered bytes back via the real loader and assert the fields.
+		dir := t.TempDir()
+		p := filepath.Join(dir, repoConfigName)
+		writeFile(t, p, string(data))
+		got, err := LoadFile(p)
+		if err != nil {
+			t.Fatalf("LoadFile of rendered bytes: %v", err)
+		}
+		if got.License != cfg.License || got.Holder != cfg.Holder {
+			t.Errorf("identity not round-tripped: %+v", got)
+		}
+		if got.Year != cfg.Year {
+			t.Errorf("year = %+v, want %+v", got.Year, cfg.Year)
+		}
+		if got.Style != cfg.Style {
+			t.Errorf("style = %v, want %v", got.Style, cfg.Style)
+		}
+		if got.ManageLicenseFile {
+			t.Errorf("manage_license_file should round-trip as false")
+		}
+		if len(got.Excludes) != 1 || got.Excludes[0] != "**/generated/**" {
+			t.Errorf("excludes = %v, want [**/generated/**]", got.Excludes)
+		}
+		if got.Policy.Required != "AGPL-3.0-or-later" || len(got.Policy.Allow) != 2 ||
+			len(got.Policy.Deny) != 1 || len(got.Policy.FailOn) != 2 {
+			t.Errorf("policy not round-tripped: %+v", got.Policy)
+		}
+	})
+
+	t.Run("policy block stays empty when no policy intent", func(t *testing.T) {
+		// A config with an empty policy must not have the policySchema populated, so the
+		// scaffold carries no required/allow/deny/fail_on values. (yaml still renders the
+		// value-typed policy key, but every sub-field is its zero value.) The guard in
+		// RenderFile is what keeps failConditionsToTokens from emitting tokens here.
+		cfg := Defaults()
+		cfg.License = "MIT"
+		cfg.Holder = "Acme"
+		cfg.Policy = model.Policy{} // explicitly empty: no required/allow/deny/fail_on
+
+		data, err := RenderFile(cfg)
+		if err != nil {
+			t.Fatalf("RenderFile error: %v", err)
+		}
+		// Decode the rendered bytes through the raw file schema (not LoadFile, which
+		// re-seeds Defaults' fail_on): with the guard skipping the policySchema
+		// assignment, the rendered policy block carries no values the user never set.
+		fs, derr := decodeYAML(data)
+		if derr != nil {
+			t.Fatalf("decodeYAML of rendered bytes: %v", derr)
+		}
+		if fs.Policy.Required != "" || len(fs.Policy.Allow) != 0 ||
+			len(fs.Policy.Deny) != 0 || len(fs.Policy.FailOn) != 0 {
+			t.Errorf("empty-policy config rendered policy intent it never had: %+v", fs.Policy)
+		}
+	})
+}
+
+// TestWriteFile covers WriteFile end to end at the config layer: it writes the
+// scaffold, refuses to clobber without force, overwrites with force, and surfaces a
+// write error when the target directory does not exist.
+func TestWriteFile(t *testing.T) {
+	cfg := Defaults()
+	cfg.License = "MIT"
+	cfg.Holder = "Acme, LLC"
+
+	t.Run("writes scaffold to a fresh dir", func(t *testing.T) {
+		dir := t.TempDir()
+		target, err := WriteFile(dir, cfg, false)
+		if err != nil {
+			t.Fatalf("WriteFile error: %v", err)
+		}
+		if target != filepath.Join(dir, repoConfigName) {
+			t.Errorf("target = %q, want %q", target, filepath.Join(dir, repoConfigName))
+		}
+		// The written file must load back to the same identity fields.
+		got, lerr := LoadFile(target)
+		if lerr != nil {
+			t.Fatalf("LoadFile error: %v", lerr)
+		}
+		if got.License != "MIT" || got.Holder != "Acme, LLC" {
+			t.Errorf("written scaffold round-trips wrong: %+v", got)
+		}
+	})
+
+	t.Run("refuses to overwrite without force", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := WriteFile(dir, cfg, false); err != nil {
+			t.Fatalf("first WriteFile error: %v", err)
+		}
+		_, err := WriteFile(dir, cfg, false)
+		if err == nil {
+			t.Fatal("second WriteFile without force should refuse to clobber")
+		}
+		if !strings.Contains(err.Error(), "already exists") {
+			t.Errorf("error should mention the existing file: %v", err)
+		}
+	})
+
+	t.Run("overwrites with force", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := WriteFile(dir, cfg, false); err != nil {
+			t.Fatalf("first WriteFile error: %v", err)
+		}
+		other := cfg
+		other.License = "Apache-2.0"
+		other.Holder = "Other, Inc"
+		target, err := WriteFile(dir, other, true)
+		if err != nil {
+			t.Fatalf("forced WriteFile error: %v", err)
+		}
+		got, lerr := LoadFile(target)
+		if lerr != nil {
+			t.Fatalf("LoadFile error: %v", lerr)
+		}
+		if got.License != "Apache-2.0" || got.Holder != "Other, Inc" {
+			t.Errorf("force did not overwrite in place: %+v", got)
+		}
+	})
+
+	t.Run("render error surfaces from WriteFile", func(t *testing.T) {
+		// RenderFile is total for any real config (yaml.Marshal of the fixed schema
+		// cannot fail), so the render-error branch is reachable only by injecting a
+		// failing renderer through the package seam. Restore it after the test.
+		orig := renderFile
+		renderErr := errors.New("synthetic render failure")
+		renderFile = func(model.Config) ([]byte, error) { return nil, renderErr }
+		t.Cleanup(func() { renderFile = orig })
+
+		dir := t.TempDir()
+		_, err := WriteFile(dir, cfg, false)
+		if !errors.Is(err, renderErr) {
+			t.Fatalf("WriteFile should surface the render error, got %v", err)
+		}
+		// A render failure must abort before any file is written.
+		if _, statErr := os.Stat(filepath.Join(dir, repoConfigName)); !os.IsNotExist(statErr) {
+			t.Errorf("no file should be written when render fails")
+		}
+	})
+
+	t.Run("write error when target dir is missing", func(t *testing.T) {
+		// Joining onto a path whose parent does not exist makes os.WriteFile fail,
+		// exercising the write-error wrap. force=true skips the exists guard so we land
+		// directly on the write attempt.
+		missing := filepath.Join(t.TempDir(), "no-such-dir")
+		_, err := WriteFile(missing, cfg, true)
+		if err == nil {
+			t.Fatal("WriteFile into a missing directory should error")
+		}
+		if !strings.Contains(err.Error(), "write") {
+			t.Errorf("error should be the write-failure wrap: %v", err)
+		}
+	})
+}
+
 // writeFile writes content to path, creating parent dirs, failing the test on error.
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()

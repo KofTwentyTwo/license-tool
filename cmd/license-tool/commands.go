@@ -251,19 +251,83 @@ func bindApplyFlags(cmd *cobra.Command, f *applyFlags) {
 	cmd.Flags().StringVar(&f.commitMessage, "commit-message", "", "commit message template (with --commit)")
 }
 
+// interactiveCollect is a package-level seam over collectInteractive so tests can
+// drive the init command's non-interactive flow (and inject answers) without a real
+// terminal. Production always points at the huh-backed collectInteractive.
+var interactiveCollect = collectInteractive
+
+// answersToConfig validates and converts collected init answers into a model.Config,
+// starting from the built-in Defaults so unset answers carry the documented default
+// behavior. WHY validation lives here, not in the wizard: the wizard is the
+// interactive shell (excluded from coverage); answersToConfig is the single tested
+// gate that both the TTY and flag-only paths funnel through, so an invalid license
+// or empty holder is rejected identically regardless of how the answers arrived.
+func answersToConfig(a initAnswers) (model.Config, error) {
+	if !spdx.Validate(a.License) {
+		return model.Config{}, fmt.Errorf("init: %q is not a recognized SPDX license identifier", a.License)
+	}
+	if a.Holder == "" {
+		return model.Config{}, fmt.Errorf("init: copyright holder is required")
+	}
+	cfg := config.Defaults()
+	cfg.License = a.License
+	cfg.Holder = a.Holder
+	if a.Year != "" {
+		ys, err := config.ParseYearSpec(a.Year)
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.Year = ys
+	}
+	if a.Style != "" {
+		st, err := config.ParseStyle(a.Style)
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.Style = st
+	}
+	cfg.ManageLicenseFile = a.ManageLicenseFile
+	cfg.Excludes = a.Excludes
+	return cfg, nil
+}
+
 func newInitCmd(shared *sharedFlags) *cobra.Command {
-	return &cobra.Command{
+	f := &applyFlags{}
+	cmd := &cobra.Command{
 		Use:   "init [path]",
 		Short: "Scaffold a .license-tool.yaml (interactive on a TTY)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := argPath(args)
-			// init scaffolds config; the config feature agent owns the body. We
-			// surface a clear not-yet-implemented error rather than silently no-op.
-			_, err := config.Resolve(path, sharedToFlags(shared), config.Options{Interactive: isTTY(), RequireApply: true})
-			return err
+			out := cmd.OutOrStdout()
+			a := initAnswers{
+				License:           f.license,
+				Holder:            f.holder,
+				Year:              f.year,
+				Style:             f.style,
+				ManageLicenseFile: true,
+				Excludes:          shared.exclude,
+			}
+			if err := interactiveCollect(&a, isTTY()); err != nil {
+				return err
+			}
+			cfg, err := answersToConfig(a)
+			if err != nil {
+				return err
+			}
+			target, err := config.WriteFile(path, cfg, f.force)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "wrote %s\n", target)
+			return nil
 		},
 	}
+	// bindApplyFlags already registers --force (bound to f.force); init reuses that
+	// same flag to mean "overwrite an existing .license-tool.yaml", so we do not
+	// re-register it here (cobra panics on a duplicate flag name).
+	bindApplyFlags(cmd, f)
+	return cmd
 }
 
 func newVersionCmd(info buildInfo) *cobra.Command {

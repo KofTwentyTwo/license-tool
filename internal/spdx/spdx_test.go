@@ -1,6 +1,7 @@
 package spdx
 
 import (
+	"sort"
 	"strings"
 	"testing"
 
@@ -97,4 +98,35 @@ func TestAGPLCanonicalStandardHeader(t *testing.T) {
 
 func TestListVersion(t *testing.T) {
 	assert.NotEmpty(t, ListVersion(), "embedded snapshot should record its list version")
+}
+
+// TestIDs confirms IDs() returns a non-empty, sorted, deprecation-free id list. The
+// picker that consumes it must never steer a user onto a deprecated id (e.g. the
+// bare "GPL-3.0"/"AGPL-3.0" forms), and must present a stable alphabetical order.
+func TestIDs(t *testing.T) {
+	ids := IDs()
+	require.NotEmpty(t, ids, "the vendored snapshot must yield some non-deprecated ids")
+
+	// Sorted, ascending.
+	assert.True(t, sort.StringsAreSorted(ids), "IDs() must be sorted")
+
+	// No deprecated ids leak through. The bare GPL/AGPL forms are deprecated in SPDX
+	// and must be filtered out so they are never offered as new choices.
+	for _, dep := range []string{"GPL-3.0", "AGPL-3.0", "GPL-2.0", "LGPL-3.0"} {
+		assert.NotContains(t, ids, dep, "deprecated id %q must be excluded from IDs()", dep)
+	}
+
+	// A representative non-deprecated id is present.
+	assert.Contains(t, ids, "MIT", "the canonical MIT id should be offered")
+}
+
+// TestCommonIDs confirms every curated shortlist id validates against the full
+// vendored index, so the picker can never present a "common" option that the rest
+// of the tool would later reject as an unknown SPDX id.
+func TestCommonIDs(t *testing.T) {
+	common := CommonIDs()
+	require.NotEmpty(t, common, "the common shortlist must not be empty")
+	for _, id := range common {
+		assert.Truef(t, Validate(id), "CommonIDs entry %q must be a valid SPDX id", id)
+	}
 }

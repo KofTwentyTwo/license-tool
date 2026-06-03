@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/KofTwentyTwo/license-tool/internal/config"
+	"github.com/KofTwentyTwo/license-tool/internal/model"
 	"github.com/KofTwentyTwo/license-tool/internal/spdx"
 )
 
@@ -442,22 +444,126 @@ func TestLicenseCommand(t *testing.T) {
 func TestInitCommand(t *testing.T) {
 	isolateEnv(t)
 
-	t.Run("complete config succeeds", func(t *testing.T) {
-		// A repo whose .license-tool.yaml already supplies license+holder satisfies
-		// the required fields without prompting, so init returns nil.
-		dir := fixtureDir(t)
-		out, err := runRoot(t, "init", dir)
+	t.Run("flags scaffold config file", func(t *testing.T) {
+		// Non-TTY stdin (forced by isolateEnv) skips the wizard, so init scaffolds a
+		// .license-tool.yaml purely from the --license/--holder flags.
+		dir := t.TempDir()
+		out, err := runRoot(t, "init", dir, "--license", "MIT", "--holder", "Acme")
 		require.NoError(t, err)
-		assert.Empty(t, out)
+		target := filepath.Join(dir, ".license-tool.yaml")
+		assert.Contains(t, out, "wrote "+target)
+		// The scaffold must round-trip back through the config loader.
+		cfg, lerr := config.LoadFile(target)
+		require.NoError(t, lerr)
+		assert.Equal(t, "MIT", cfg.License)
+		assert.Equal(t, "Acme", cfg.Holder)
 	})
 
-	t.Run("missing required fields errors", func(t *testing.T) {
-		// No config and a non-TTY stdin: fillRequired hard-errors rather than hanging.
+	t.Run("missing license errors", func(t *testing.T) {
+		// No --license flag and a non-TTY stdin: answersToConfig rejects the empty
+		// license rather than writing a header with no identity.
 		dir := t.TempDir()
-		writeFile(t, dir, "main.go", "package main\n")
-		_, err := runRoot(t, "init", dir)
-		require.ErrorIs(t, err, config.ErrMissingRequired)
+		_, err := runRoot(t, "init", dir, "--holder", "Acme")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "SPDX license identifier")
 	})
+
+	t.Run("existing file needs force", func(t *testing.T) {
+		dir := t.TempDir()
+		_, err := runRoot(t, "init", dir, "--license", "MIT", "--holder", "Acme")
+		require.NoError(t, err)
+		// A second run without --force must refuse to clobber the committed config.
+		_, err = runRoot(t, "init", dir, "--license", "Apache-2.0", "--holder", "Other")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "already exists")
+		// With --force it overwrites in place.
+		_, err = runRoot(t, "init", dir, "--license", "Apache-2.0", "--holder", "Other", "--force")
+		require.NoError(t, err)
+		cfg, lerr := config.LoadFile(filepath.Join(dir, ".license-tool.yaml"))
+		require.NoError(t, lerr)
+		assert.Equal(t, "Apache-2.0", cfg.License)
+	})
+}
+
+// TestAnswersToConfig drives the single tested gate that both the TTY wizard and
+// the flag-only path funnel through: the valid case plus each rejection (unknown
+// license, empty holder, bad year, bad style). WHY exhaustive here: the wizard shell
+// is excluded from coverage, so this is the only place the validation/parse arms are
+// exercised, and they must reject identically regardless of how answers arrived.
+func TestAnswersToConfig(t *testing.T) {
+	t.Run("valid answers build a config from defaults", func(t *testing.T) {
+		cfg, err := answersToConfig(initAnswers{
+			License:           "MIT",
+			Holder:            "Acme, LLC",
+			Year:              "2021-2026",
+			Style:             "reuse",
+			ManageLicenseFile: false,
+			Excludes:          []string{"**/vendor/**"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "MIT", cfg.License)
+		assert.Equal(t, "Acme, LLC", cfg.Holder)
+		assert.Equal(t, model.YearRange, cfg.Year.Kind)
+		assert.Equal(t, 2021, cfg.Year.Start)
+		assert.Equal(t, 2026, cfg.Year.End)
+		assert.Equal(t, model.StyleReuse, cfg.Style)
+		assert.False(t, cfg.ManageLicenseFile)
+		assert.Equal(t, []string{"**/vendor/**"}, cfg.Excludes)
+	})
+
+	t.Run("empty year and style keep the built-in defaults", func(t *testing.T) {
+		// Unset year/style answers must leave the Defaults() values untouched, so the
+		// year/style parse branches are skipped (not defaulted to a parse of "").
+		cfg, err := answersToConfig(initAnswers{License: "MIT", Holder: "Acme"})
+		require.NoError(t, err)
+		assert.Equal(t, model.YearGit, cfg.Year.Kind)
+		assert.Equal(t, model.StyleReusePlusNotice, cfg.Style)
+	})
+
+	t.Run("unknown license rejected", func(t *testing.T) {
+		_, err := answersToConfig(initAnswers{License: "NOT-A-LICENSE", Holder: "Acme"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not a recognized SPDX license identifier")
+	})
+
+	t.Run("empty holder rejected", func(t *testing.T) {
+		_, err := answersToConfig(initAnswers{License: "MIT", Holder: ""})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "copyright holder is required")
+	})
+
+	t.Run("bad year rejected", func(t *testing.T) {
+		_, err := answersToConfig(initAnswers{License: "MIT", Holder: "Acme", Year: "not-a-year"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "year")
+	})
+
+	t.Run("bad style rejected", func(t *testing.T) {
+		_, err := answersToConfig(initAnswers{License: "MIT", Holder: "Acme", Style: "fancy"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown style")
+	})
+}
+
+// TestInitCommandInteractiveCollectError covers the init RunE branch where the
+// interactiveCollect seam returns an error: the command must propagate it verbatim
+// and write nothing. The seam is overridden so the failure is deterministic without
+// a real terminal (the huh wizard itself is excluded from coverage).
+func TestInitCommandInteractiveCollectError(t *testing.T) {
+	isolateEnv(t)
+
+	orig := interactiveCollect
+	wantErr := errors.New("wizard aborted")
+	interactiveCollect = func(_ *initAnswers, _ bool) error { return wantErr }
+	t.Cleanup(func() { interactiveCollect = orig })
+
+	dir := t.TempDir()
+	_, err := runRoot(t, "init", dir, "--license", "MIT", "--holder", "Acme")
+	require.ErrorIs(t, err, wantErr, "init must propagate the interactiveCollect error")
+
+	// The collect failure must abort before any file is written.
+	_, statErr := os.Stat(filepath.Join(dir, ".license-tool.yaml"))
+	assert.True(t, os.IsNotExist(statErr), "no config should be written when collect fails")
 }
 
 func TestSharedToFlags(t *testing.T) {
