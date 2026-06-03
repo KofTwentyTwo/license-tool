@@ -61,6 +61,9 @@ changelog:
 
 brews:
   - name: license-tool
+    # Write the formula under Formula/ (Homebrew's convention and where brew looks);
+    # the default empty directory drops it at the tap root, where brew ignores it.
+    directory: Formula
     repository:
       owner: KofTwentyTwo
       name: homebrew-tap
