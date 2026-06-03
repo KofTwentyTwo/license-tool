@@ -43,7 +43,12 @@ jobs:
         run: go vet ./...
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
+        with:
+          # v8 installs golangci-lint v2.x, which understands the v2 .golangci.yml
+          # schema (version/formatters). latest pulls a build made with a current Go
+          # toolchain, satisfying the module's go directive.
+          version: latest
 
       - name: Run tests with coverage profile
         run: |
