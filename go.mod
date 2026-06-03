@@ -1,6 +1,6 @@
 module github.com/KofTwentyTwo/license-tool
 
-go 1.26
+go 1.24
 
 require (
 	github.com/github/go-spdx/v2 v2.7.0
