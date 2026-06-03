@@ -51,15 +51,25 @@ func normalizeSPDX(raw string) (string, bool) {
 	return "", false
 }
 
+// extractLicensesFn and validateLicensesFn are seams over the go-spdx expression
+// helpers. ExtractLicenses already rejects an unknown id with an error, so a
+// single id it returns also passes ValidateLicenses in practice; reassigning
+// validateLicensesFn in a test lets the otherwise-unreachable validation-failure
+// guard be exercised without altering production behavior.
+var (
+	extractLicensesFn  = spdxexp.ExtractLicenses
+	validateLicensesFn = spdxexp.ValidateLicenses
+)
+
 // validateSingleSPDX returns the canonical id when s is a single, valid,
 // non-compound SPDX identifier. Compound expressions (OR/AND/WITH) resolve to
 // more than one id and so are rejected: a single dependency record holds one id.
 func validateSingleSPDX(s string) (string, bool) {
-	ids, err := spdxexp.ExtractLicenses(s)
+	ids, err := extractLicensesFn(s)
 	if err != nil || len(ids) != 1 {
 		return "", false
 	}
-	if ok, _ := spdxexp.ValidateLicenses(ids); !ok {
+	if ok, _ := validateLicensesFn(ids); !ok {
 		return "", false
 	}
 	return ids[0], true
@@ -69,25 +79,25 @@ func validateSingleSPDX(s string) (string, bool) {
 // Maven POM <name> elements and npm package.json fields to their canonical SPDX
 // id. Keys are lowercased; the map is intentionally conservative.
 var spdxAliases = map[string]string{
-	"apache 2.0":                       "Apache-2.0",
-	"apache license 2.0":               "Apache-2.0",
-	"apache license, version 2.0":      "Apache-2.0",
+	"apache 2.0":                               "Apache-2.0",
+	"apache license 2.0":                       "Apache-2.0",
+	"apache license, version 2.0":              "Apache-2.0",
 	"the apache software license, version 2.0": "Apache-2.0",
-	"apache-2":                         "Apache-2.0",
-	"mit license":                      "MIT",
-	"the mit license":                  "MIT",
-	"bsd":                              "BSD-2-Clause",
-	"bsd license":                      "BSD-2-Clause",
-	"new bsd license":                  "BSD-3-Clause",
-	"3-clause bsd license":             "BSD-3-Clause",
-	"bsd 3-clause":                     "BSD-3-Clause",
-	"the bsd 3-clause license":         "BSD-3-Clause",
-	"eclipse public license 2.0":       "EPL-2.0",
-	"eclipse public license - v 2.0":   "EPL-2.0",
-	"eclipse public license 1.0":       "EPL-1.0",
-	"gnu lesser general public license": "LGPL-3.0-or-later",
-	"isc license":                      "ISC",
-	"the unlicense":                    "Unlicense",
-	"mozilla public license 2.0":       "MPL-2.0",
+	"apache-2":                                 "Apache-2.0",
+	"mit license":                              "MIT",
+	"the mit license":                          "MIT",
+	"bsd":                                      "BSD-2-Clause",
+	"bsd license":                              "BSD-2-Clause",
+	"new bsd license":                          "BSD-3-Clause",
+	"3-clause bsd license":                     "BSD-3-Clause",
+	"bsd 3-clause":                             "BSD-3-Clause",
+	"the bsd 3-clause license":                 "BSD-3-Clause",
+	"eclipse public license 2.0":               "EPL-2.0",
+	"eclipse public license - v 2.0":           "EPL-2.0",
+	"eclipse public license 1.0":               "EPL-1.0",
+	"gnu lesser general public license":        "LGPL-3.0-or-later",
+	"isc license":                              "ISC",
+	"the unlicense":                            "Unlicense",
+	"mozilla public license 2.0":               "MPL-2.0",
 	"gnu affero general public license v3.0 or later": "AGPL-3.0-or-later",
 }

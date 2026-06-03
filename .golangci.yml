@@ -1,0 +1,71 @@
+# golangci-lint configuration for license-tool.
+# https://golangci-lint.run
+#
+# Schema is golangci-lint v2. We start from no default set and enable an
+# explicit, conservative roster so the linter behaves the same regardless of
+# the upstream "standard" default changing between releases. Formatting is
+# handled by the dedicated formatters block (gofmt) rather than a linter.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - revive
+
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        # fieldalignment is purely an optimization hint and produces noisy
+        # diffs for readable struct ordering; keep it off.
+        - fieldalignment
+    errcheck:
+      # Reading from os.Stdout/Stderr and similar are not worth gating on.
+      check-type-assertions: true
+      check-blank: false
+    revive:
+      severity: warning
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: superfluous-else
+        - name: time-naming
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+
+  exclusions:
+    # Keep generated and example output out of scope.
+    generated: lax
+    rules:
+      # Tests legitimately do things production code should not: long table
+      # literals, fixture funcs that return errors callers ignore, exported
+      # symbols with no doc comment. Silence the noisy linters there while
+      # keeping correctness checks (govet, staticcheck, ineffassign) on.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - revive
+          - unused
+
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    generated: lax

@@ -590,6 +590,152 @@ func TestYearResolverUnknownKind(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// --- White-box helper coverage: blank-line line-wrapping, hasRule miss, EOF guard ---
+
+// TestWrapCommentLineStyleBlankLines drives wrapComment directly so the
+// blank-body-line branch of the line-comment path is exercised deterministically:
+// a blank input line must become the line prefix trimmed of trailing whitespace
+// (no trailing spaces emitted), while non-blank lines keep the full prefix.
+func TestWrapCommentLineStyleBlankLines(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		cs   model.CommentStyle
+		want string
+	}{
+		{
+			name: "hash prefix blank line trims trailing space",
+			body: "first\n\nsecond",
+			cs:   model.CommentStyle{Block: false, LinePrefix: "# "},
+			// The middle blank line becomes a bare "#" with no trailing space.
+			want: "# first\n#\n# second",
+		},
+		{
+			name: "slash prefix blank line trims trailing space",
+			body: "a\n\nb",
+			cs:   model.CommentStyle{Block: false, LinePrefix: "// "},
+			want: "// a\n//\n// b",
+		},
+		{
+			name: "leading and trailing blank lines",
+			body: "\nmid\n",
+			cs:   model.CommentStyle{Block: false, LinePrefix: "-- "},
+			want: "--\n-- mid\n--",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := wrapComment(c.body, c.cs)
+			assert.Equal(t, c.want, got)
+			// A blank body line must never carry trailing whitespace.
+			for _, l := range strings.Split(got, "\n") {
+				assert.Equal(t, strings.TrimRight(l, " \t"), l,
+					"no line may carry trailing whitespace, got %q", l)
+			}
+		})
+	}
+}
+
+// TestWrapCommentBlankLineThroughHeader confirms the same blank-line behavior end
+// to end: a line-commented file rendered with StyleReusePlusNotice on a license
+// that defines a standard header produces a blank separator line between the REUSE
+// tags and the notice, which must wrap to a bare (whitespace-free) prefix.
+func TestWrapCommentBlankLineThroughHeader(t *testing.T) {
+	agpl := mustLicense(t, "AGPL-3.0-or-later")
+	shFT := ftFor(t, "x.sh")
+	require.False(t, shFT.CommentStyle.Block, "shell must be a line-comment type")
+
+	got, err := Header(HeaderInput{
+		License: agpl, Holder: "Acme", Year: "2026",
+		Style: model.StyleReusePlusNotice, FileType: shFT,
+	})
+	require.NoError(t, err)
+
+	prefix := strings.TrimRight(shFT.CommentStyle.LinePrefix, " \t")
+	// The blank separator between tags and notice must appear as a bare prefix line.
+	assert.Contains(t, got, "\n"+prefix+"\n", "blank separator wraps to a bare prefix line")
+	for _, l := range strings.Split(strings.TrimRight(got, "\n"), "\n") {
+		assert.Equal(t, strings.TrimRight(l, " \t"), l,
+			"no wrapped line may carry trailing whitespace, got %q", l)
+	}
+}
+
+// TestHasRule drives hasRule directly to cover both the match and the no-match
+// (return false) outcomes, including kind-match-but-Before-mismatch.
+func TestHasRule(t *testing.T) {
+	ftBOMAfter := model.FileType{
+		PreserveFirst: []model.PreserveRule{
+			{Kind: model.PreserveShebang, Before: false},
+			{Kind: model.PreserveBOM, Before: false},
+		},
+	}
+	ftPackageBefore := model.FileType{
+		PreserveFirst: []model.PreserveRule{
+			{Kind: model.PreservePackageDecl, Before: true},
+		},
+	}
+	cases := []struct {
+		name   string
+		ft     model.FileType
+		kind   model.PreserveKind
+		before bool
+		want   bool
+	}{
+		{"matches kind and before", ftBOMAfter, model.PreserveBOM, false, true},
+		{"kind present but before mismatches", ftBOMAfter, model.PreserveBOM, true, false},
+		{"kind absent entirely", ftPackageBefore, model.PreserveBOM, false, false},
+		{"empty rule list", model.FileType{}, model.PreserveShebang, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, hasRule(c.ft, c.kind, c.before))
+		})
+	}
+}
+
+// TestPreserveBoundaryNoBOMRule covers the hasRule miss through preserveBoundary:
+// a Go file (no PreserveBOM rule) whose content begins with BOM bytes must NOT
+// advance past them via the BOM branch (the type does not preserve a BOM), so the
+// boundary stays at 0 and the header would lead the (here, BOM-prefixed) content.
+func TestPreserveBoundaryNoBOMRule(t *testing.T) {
+	ftNoBOM := model.FileType{
+		Name: "fake",
+		PreserveFirst: []model.PreserveRule{
+			{Kind: model.PreservePackageDecl, Before: true},
+		},
+	}
+	content := append([]byte{0xEF, 0xBB, 0xBF}, []byte("package main\n")...)
+	at := preserveBoundary(content, ftNoBOM)
+	assert.Equal(t, 0, at, "without a PreserveBOM rule the boundary does not skip the BOM bytes")
+}
+
+// TestAdvanceLineIfAtEOF drives advanceLineIf's pos>=len(content) guard: starting
+// at or past the end returns pos unchanged without consulting the predicate.
+func TestAdvanceLineIfAtEOF(t *testing.T) {
+	called := false
+	match := func(string) bool {
+		called = true
+		return true
+	}
+	cases := []struct {
+		name    string
+		content []byte
+		pos     int
+	}{
+		{"pos equals length", []byte("abc"), 3},
+		{"pos past length", []byte("abc"), 10},
+		{"empty content pos zero", []byte(""), 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			called = false
+			got := advanceLineIf(c.content, c.pos, match)
+			assert.Equal(t, c.pos, got, "EOF guard returns pos unchanged")
+			assert.False(t, called, "predicate must not be consulted past EOF")
+		})
+	}
+}
+
 func TestSpliceNeverAltersBytesOutsideHeaderRegion(t *testing.T) {
 	// Safety invariant: for an insert, the entire original content must appear
 	// verbatim and contiguously somewhere in the output (only the header is added).

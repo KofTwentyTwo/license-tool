@@ -29,6 +29,12 @@ import (
 // highest-confidence signal that a leading comment is safe to replace.
 const Sentinel = "license-tool:managed"
 
+// preserveBoundaryFn is the seam Detect calls to compute the preserve-first
+// boundary. It defaults to the real PreserveBoundary (which is incapable of
+// returning an error today); tests reassign it to inject an error so Detect's
+// error-propagation guard is exercised without changing production behavior.
+var preserveBoundaryFn = PreserveBoundary
+
 // fingerprintCoverPercent is the minimum licensecheck coverage of the comment
 // region required to treat a phrase match as a license header. WHY high: the
 // fingerprint path is the least-certain recognizer, so we demand that most of the
@@ -96,8 +102,10 @@ func Detect(content []byte, ft model.FileType) (model.DetectedHeader, error) {
 
 	// Step past the preserve-first prefixes the header would sit AFTER. Detection of an
 	// existing header begins here so a shebang or XML declaration is never mistaken for
-	// (or absorbed into) the header span.
-	boundary, err := PreserveBoundary(content, ft)
+	// (or absorbed into) the header span. preserveBoundaryFn is a seam: production
+	// always uses the real PreserveBoundary (which never errors), but a test can
+	// inject an error to exercise this guard.
+	boundary, err := preserveBoundaryFn(content, ft)
 	if err != nil {
 		return model.DetectedHeader{}, err
 	}
@@ -383,9 +391,7 @@ func spdxIdentifierTag(commentText string) (string, bool) {
 		return "", false
 	}
 	// A multi-license expression is reported as-is; the first token is the primary id.
-	if fields := strings.Fields(id); len(fields) > 0 {
-		return id, true
-	}
+	// (id is already non-empty here, so it always has at least one field.)
 	return id, true
 }
 

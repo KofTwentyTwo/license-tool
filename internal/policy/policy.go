@@ -166,23 +166,7 @@ func EvaluateRepo(p model.Policy, ids []string) []Violation {
 
 	// Per-id allow/deny across the repo's licenses.
 	for _, id := range distinct {
-		if id == "" {
-			continue
-		}
-		if inList(p.Deny, id) {
-			out = append(out, Violation{
-				Condition: model.FailOnPolicyViolation,
-				SPDXID:    id,
-				Message:   fmt.Sprintf("repo: license %q is on the deny list", id),
-			})
-		}
-		if len(p.Allow) > 0 && !inList(p.Allow, id) {
-			out = append(out, Violation{
-				Condition: model.FailOnPolicyViolation,
-				SPDXID:    id,
-				Message:   fmt.Sprintf("repo: license %q is not on the allow list", id),
-			})
-		}
+		out = append(out, evaluateLicenseID(p, id)...)
 	}
 
 	// Required license must appear somewhere in the repo's detected licenses. WHY only
@@ -219,6 +203,32 @@ func EvaluateRepo(p model.Policy, ids []string) []Violation {
 		}
 	}
 
+	return out
+}
+
+// evaluateLicenseID returns the repo-level deny/allow violations for one detected
+// license id. An empty id yields no violations: uniqueSorted already strips empties
+// before EvaluateRepo's loop, so the empty guard is unreachable from there; it is
+// factored out so that defensive branch can be exercised directly.
+func evaluateLicenseID(p model.Policy, id string) []Violation {
+	if id == "" {
+		return nil
+	}
+	var out []Violation
+	if inList(p.Deny, id) {
+		out = append(out, Violation{
+			Condition: model.FailOnPolicyViolation,
+			SPDXID:    id,
+			Message:   fmt.Sprintf("repo: license %q is on the deny list", id),
+		})
+	}
+	if len(p.Allow) > 0 && !inList(p.Allow, id) {
+		out = append(out, Violation{
+			Condition: model.FailOnPolicyViolation,
+			SPDXID:    id,
+			Message:   fmt.Sprintf("repo: license %q is not on the allow list", id),
+		})
+	}
 	return out
 }
 

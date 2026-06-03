@@ -145,3 +145,97 @@ func TestMergeOverrideAddsAndReplaces(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "YAML", orig.Name)
 }
+
+// TestMergeOverrideWithFilenames covers an override that carries a Filenames
+// entry: the merged name index must pick it up so an exact base-name match
+// resolves to the override (exercising the filename loop and the closure's
+// name-index branch).
+func TestMergeOverrideWithFilenames(t *testing.T) {
+	override := model.FileType{
+		Name:         "MakeLang",
+		Extensions:   []string{".mk"},
+		Filenames:    []string{"Makefile", "GNUmakefile"},
+		CommentStyle: model.CommentStyle{Block: false, LinePrefix: "# "},
+	}
+	lookup := Merge(map[string]model.FileType{".mk": override})
+
+	cases := []struct {
+		name     string
+		path     string
+		wantOK   bool
+		wantName string
+	}{
+		{"override filename Makefile", "Makefile", true, "MakeLang"},
+		{"override filename in subdir", "build/GNUmakefile", true, "MakeLang"},
+		{"override extension", "rules.mk", true, "MakeLang"},
+		{"builtin filename still resolves", "Dockerfile", true, "Dockerfile"},
+		{"builtin extension still resolves", "Main.java", true, "Java"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ft, ok := lookup(c.path)
+			require.Equalf(t, c.wantOK, ok, "lookup(%q) ok", c.path)
+			assert.Equalf(t, c.wantName, ft.Name, "lookup(%q) name", c.path)
+		})
+	}
+}
+
+// TestMergeLookupMisses covers the negative paths of the merged closure:
+// a path with no extension and a path with an unknown extension. Both must
+// report not-found, mirroring the package-global Lookup behavior.
+func TestMergeLookupMisses(t *testing.T) {
+	lookup := Merge(map[string]model.FileType{
+		".myext": {
+			Name:         "MyLang",
+			Extensions:   []string{".myext"},
+			CommentStyle: model.CommentStyle{Block: false, LinePrefix: "// "},
+		},
+	})
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"no extension, not a known filename", "README"},
+		{"no extension bare base", "noext"},
+		{"unknown extension", "data.bin"},
+		{"dotfile resolves as extension and misses", ".unknownrc"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ft, ok := lookup(c.path)
+			assert.Falsef(t, ok, "lookup(%q) should miss", c.path)
+			assert.Equalf(t, model.FileType{}, ft, "lookup(%q) should return zero FileType", c.path)
+		})
+	}
+}
+
+// TestMergeEmptyOverrides ensures Merge with no overrides behaves exactly like
+// the package-global Lookup across builtin extension, builtin filename, skip,
+// and miss cases.
+func TestMergeEmptyOverrides(t *testing.T) {
+	lookup := Merge(nil)
+
+	cases := []struct {
+		name     string
+		path     string
+		wantOK   bool
+		wantName string
+	}{
+		{"builtin extension", "main.go", true, "Go"},
+		{"builtin filename", "pom.xml", true, "XML/HTML"},
+		{"skip type", "package.json", true, "JSON"},
+		{"unknown", "data.bin", false, ""},
+		{"no extension", "README", false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ft, ok := lookup(c.path)
+			require.Equalf(t, c.wantOK, ok, "lookup(%q) ok", c.path)
+			if !c.wantOK {
+				return
+			}
+			assert.Equalf(t, c.wantName, ft.Name, "lookup(%q) name", c.path)
+		})
+	}
+}

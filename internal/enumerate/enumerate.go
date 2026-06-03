@@ -59,6 +59,16 @@ const (
 	reasonUncommentable = "uncommentable"
 )
 
+// filepathAbs and filepathRel are seams for the standard-library path helpers so
+// tests can drive their (in practice unreachable) error returns. filepath.Abs only
+// errors when os.Getwd fails, and filepath.Rel only errors on a base/target
+// mismatch that WalkDir's contract precludes; production always uses the real
+// functions, so swapping these in a test changes nothing about runtime behavior.
+var (
+	filepathAbs = filepath.Abs
+	filepathRel = filepath.Rel
+)
+
 // Enumerate returns the files under root to process, classified and filtered.
 // classify is the file-type lookup (filetype.Lookup or a filetype.Merge closure)
 // so config overrides are honored.
@@ -68,7 +78,7 @@ const (
 // root is inside a working tree. Only outside git do we approximate those semantics
 // with a manual walk, which is necessarily a smaller subset of git's behavior.
 func Enumerate(root string, opts Options, classify func(path string) (model.FileType, bool)) ([]Entry, error) {
-	absRoot, err := filepath.Abs(root)
+	absRoot, err := filepathAbs(root)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +271,7 @@ func walkListFiles(path string, opts Options) ([]string, error) {
 			return err
 		}
 
-		rel, rerr := filepath.Rel(path, p)
+		rel, rerr := filepathRel(path, p)
 		if rerr != nil {
 			return rerr
 		}

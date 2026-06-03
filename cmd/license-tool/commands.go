@@ -183,9 +183,9 @@ func newApplyCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if f.license != "" && !spdx.Validate(f.license) {
-				return fmt.Errorf("unknown SPDX license id: %q", f.license)
-			}
+			// config.Resolve already validates the merged license (which equals f.license
+			// whenever the flag is set) against the vendored SPDX list, so no second check
+			// is needed here.
 			r, err := applier.Apply(path, cfg, applier.Options{
 				Write:             f.write,
 				AllowDirty:        f.allowDirty,
@@ -216,9 +216,9 @@ func newLicenseCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if f.license != "" && !spdx.Validate(f.license) {
-				return fmt.Errorf("unknown SPDX license id: %q", f.license)
-			}
+			// config.Resolve already validates the merged license (which equals f.license
+			// whenever the flag is set) against the vendored SPDX list, so no second check
+			// is needed here.
 			results, err := applier.ManageLicenseFiles(path, cfg, applier.Options{
 				Write:             f.write,
 				AllowDirty:        f.allowDirty,

@@ -48,6 +48,18 @@ type Options struct {
 // it so the render package stays the single source of header text.
 type HeaderRenderFunc func(ft model.FileType) (string, error)
 
+// manageLicenseFilesFn is the seam Apply uses to manage the top-level license
+// files. It defaults to ManageLicenseFiles; because Apply validates cfg.License via
+// the same spdx.Lookup beforehand, the only way ManageLicenseFiles errors here is a
+// render failure that cannot occur for a looked-up license, so a test reassigns
+// this seam to exercise Apply's error-propagation guard.
+var manageLicenseFilesFn = ManageLicenseFiles
+
+// detectFn is the seam ApplyFile uses to detect an existing header. detect.Detect
+// errors only when its (currently infallible) preserve-boundary step fails, so this
+// seam lets ApplyFile's detect-error guard be exercised without changing behavior.
+var detectFn = detect.Detect
+
 // Apply renders and (optionally) writes headers across the repo rooted at path
 // under cfg and opts, returning the per-file results (including dry-run diffs).
 // Flow: clean-tree gate, resolve license + year, enumerate, per-file render/splice,
@@ -122,7 +134,7 @@ func Apply(path string, cfg model.Config, opts Options) (model.Report, error) {
 	}
 
 	if opts.ManageLicenseFile {
-		lf, lerr := ManageLicenseFiles(path, cfg, opts)
+		lf, lerr := manageLicenseFilesFn(path, cfg, opts)
 		if lerr != nil {
 			return model.Report{}, lerr
 		}
@@ -154,7 +166,7 @@ func ApplyFile(content []byte, ft model.FileType, in HeaderRenderFunc) (newConte
 	if herr != nil {
 		return content, "", "none", herr
 	}
-	detected, derr := detect.Detect(content, ft)
+	detected, derr := detectFn(content, ft)
 	if derr != nil {
 		return content, "", "none", derr
 	}
@@ -162,6 +174,16 @@ func ApplyFile(content []byte, ft model.FileType, in HeaderRenderFunc) (newConte
 	diff = unifiedDiff(ft.Name, content, newContent)
 	return newContent, diff, action, nil
 }
+
+// licenseFileFn and licensesEntryFn are seams over the render entry points so tests
+// can drive the render-failure branches. Every curated license that spdx.Lookup
+// returns carries non-empty text, so these renderers never fail in production from a
+// looked-up license; the seams let those guards be exercised without changing
+// runtime behavior.
+var (
+	licenseFileFn   = render.LicenseFile
+	licensesEntryFn = render.LicensesEntry
+)
 
 // ManageLicenseFiles writes (or, on dry-run, diffs) the top-level LICENSE file and
 // the LICENSES/<id>.txt REUSE entry for cfg's license at the repo root.
@@ -171,11 +193,11 @@ func ManageLicenseFiles(path string, cfg model.Config, opts Options) ([]model.Fi
 		return nil, fmt.Errorf("applier: unknown license %q", cfg.License)
 	}
 
-	body, err := render.LicenseFile(license)
+	body, err := licenseFileFn(license)
 	if err != nil {
 		return nil, err
 	}
-	entry, err := render.LicensesEntry(license)
+	entry, err := licensesEntryFn(license)
 	if err != nil {
 		return nil, err
 	}
@@ -216,6 +238,16 @@ func writeManaged(root, rel string, want []byte, opts Options) model.FileResult 
 	return fr
 }
 
+// tmpWrite, tmpClose, and chmodFn are seams over the temp-file write/close and the
+// chmod step so tests can drive the otherwise-environment-dependent failure
+// branches (a short write, a close error, a chmod refusal) deterministically.
+// Production always uses the real os operations, so runtime behavior is unchanged.
+var (
+	tmpWrite = func(f *os.File, b []byte) (int, error) { return f.Write(b) }
+	tmpClose = func(f *os.File) error { return f.Close() }
+	chmodFn  = os.Chmod
+)
+
 // AtomicWrite writes content to path via a temp-file-then-rename so a crash never
 // leaves a half-written source file. It preserves the original file mode.
 func AtomicWrite(path string, content []byte) error {
@@ -233,14 +265,14 @@ func AtomicWrite(path string, content []byte) error {
 	// Best-effort cleanup; a no-op once the rename below succeeds.
 	defer os.Remove(tmpName)
 
-	if _, err := tmp.Write(content); err != nil {
-		tmp.Close()
+	if _, err := tmpWrite(tmp, content); err != nil {
+		tmpClose(tmp)
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if err := tmpClose(tmp); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpName, mode); err != nil {
+	if err := chmodFn(tmpName, mode); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, path)

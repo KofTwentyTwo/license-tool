@@ -1,0 +1,38 @@
+# Coverage gate for github.com/vladopajic/go-test-coverage.
+#
+# The CI job (see .github/workflows/ci.yml) generates a coverage profile over
+# ./internal/... and ./cmd/... and runs go-test-coverage against this config. The
+# build FAILS if total coverage on the gated set drops below 100%.
+#
+# go-test-coverage is a CI-only tool: it is invoked via `go run` in the workflow and
+# is intentionally NOT a module dependency (it never appears in go.mod).
+profile: cover.out
+
+# Coverage thresholds. Only the total threshold gates the build; file/package
+# thresholds are left at 0 so the gate is driven solely by the 100% total below.
+threshold:
+  file: 0
+  package: 0
+  total: 100
+
+# Documented exclusions. These two files are the ONLY code excluded from the 100%
+# coverage requirement, and each is excluded for a concrete, defensible reason:
+#
+#   1. cmd/license-tool/main.go
+#      The main() shim is a thin entry point: it builds the cobra command tree and
+#      calls Execute(), then os.Exit(2) on error. It contains no business logic of
+#      its own (every command's behavior lives in commands.go and the internal
+#      packages, which ARE covered), and a process-level main()/os.Exit cannot be
+#      exercised by an in-process unit test without re-exec gymnastics that add no
+#      real coverage value. buildInfo.String() in the same file is still covered.
+#
+#   2. scripts/gen_spdx.go
+#      The SPDX snapshot generator is a build-tagged (`//go:build ignore`) developer
+#      tool that fetches upstream license-list-data over the network and writes the
+#      vendored data/ artifacts. The ignore tag already removes it from the normal
+#      build and from coverage instrumentation; it is listed here for documentation
+#      and defense-in-depth. It is not part of the shipped binary.
+exclude:
+  paths:
+    - ^cmd/license-tool/main\.go$
+    - ^scripts/gen_spdx\.go$

@@ -45,8 +45,26 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
 
-      - name: Run tests
-        run: go test ./... -race -cover
+      - name: Run tests with coverage profile
+        run: |
+          go test ./... -race \
+            -coverpkg=./internal/...,./cmd/... \
+            -covermode=atomic \
+            -coverprofile=cover.out
+
+      - name: Upload coverage profile
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-profile-${{ github.run_id }}-${{ github.sha }}
+          path: cover.out
+          if-no-files-found: error
+
+      - name: Enforce 100% coverage gate
+        # go-test-coverage is a CI-only tool, run via `go run` so it never becomes a
+        # go.mod dependency. The gate FAILS the build when total coverage on
+        # ./internal/...,./cmd/... drops below the 100 threshold in .testcoverage.yml,
+        # which documents the only two exclusions (the main() shim and gen_spdx.go).
+        run: go run github.com/vladopajic/go-test-coverage/v2@v2.18.8 --config=.testcoverage.yml
 
       - name: Build
         run: go build ./...

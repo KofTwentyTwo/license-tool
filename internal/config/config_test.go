@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bufio"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,25 @@ import (
 
 	"github.com/KofTwentyTwo/license-tool/internal/model"
 )
+
+// errReader always fails its Read with a non-EOF error, exercising the prompt
+// read-error branches that a normal closed-stdin (EOF) reader cannot reach.
+type errReader struct{ err error }
+
+func (e errReader) Read(p []byte) (int, error) { return 0, e.err }
+
+// withPromptErrReader swaps the prompt reader for one that returns a non-EOF
+// read error, restoring the original after the test.
+func withPromptErrReader(t *testing.T, err error) {
+	t.Helper()
+	origR, origW := promptReader, promptWriter
+	promptReader = errReader{err: err}
+	promptWriter = &strings.Builder{}
+	t.Cleanup(func() {
+		promptReader = origR
+		promptWriter = origW
+	})
+}
 
 // withPromptIO swaps the package prompt seams for the duration of a test and
 // restores them afterward, so prompt-driven cases run without a real terminal.
@@ -664,6 +684,220 @@ func TestNormalizeExt(t *testing.T) {
 		if got := normalizeExt(tt.in); got != tt.want {
 			t.Errorf("normalizeExt(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+// TestMergeFlags exercises the highest-precedence flag layer directly, covering
+// the year/style parse branches (success and error) that the file layers cannot
+// reach the same way. The flag values flow through ParseYearSpec/ParseStyle.
+func TestMergeFlags(t *testing.T) {
+	t.Run("year and style flags override", func(t *testing.T) {
+		cfg := Defaults()
+		err := mergeFlags(&cfg, Flags{Year: "2026", Style: "reuse"})
+		if err != nil {
+			t.Fatalf("mergeFlags error: %v", err)
+		}
+		if cfg.Year.Kind != model.YearExplicit || cfg.Year.Start != 2026 {
+			t.Errorf("year flag not applied: %+v", cfg.Year)
+		}
+		if cfg.Style != model.StyleReuse {
+			t.Errorf("style flag not applied: %v", cfg.Style)
+		}
+	})
+
+	t.Run("invalid year flag errors", func(t *testing.T) {
+		cfg := Defaults()
+		if err := mergeFlags(&cfg, Flags{Year: "nope"}); err == nil {
+			t.Fatal("invalid --year flag should error")
+		}
+	})
+
+	t.Run("invalid style flag errors after valid year", func(t *testing.T) {
+		// A valid year sets cfg.Year before the style parse fails, exercising the
+		// year-success path and the style-error path in one call.
+		cfg := Defaults()
+		err := mergeFlags(&cfg, Flags{Year: "current", Style: "bogus"})
+		if err == nil {
+			t.Fatal("invalid --style flag should error")
+		}
+		if cfg.Year.Kind != model.YearCurrent {
+			t.Errorf("year should have been applied before style failure: %+v", cfg.Year)
+		}
+	})
+}
+
+// TestResolveYearFlagError drives the flag-layer error all the way through
+// Resolve (mergeFlags error -> Resolve returns it), covering the Resolve
+// mergeFlags branch that the layering happy paths skip.
+func TestResolveYearFlagError(t *testing.T) {
+	t.Run("invalid year flag surfaces from Resolve", func(t *testing.T) {
+		isolateXDG(t)
+		repo := t.TempDir()
+		if _, err := Resolve(repo, Flags{Year: "not-a-year"}, Options{Interactive: false}); err == nil {
+			t.Fatal("invalid --year flag should error from Resolve")
+		}
+	})
+
+	t.Run("invalid style flag surfaces from Resolve", func(t *testing.T) {
+		isolateXDG(t)
+		repo := t.TempDir()
+		if _, err := Resolve(repo, Flags{Style: "weird"}, Options{Interactive: false}); err == nil {
+			t.Fatal("invalid --style flag should error from Resolve")
+		}
+	})
+}
+
+// TestResolveUserLayerErrors covers the user/global layer load and merge error
+// branches in Resolve: a malformed user config (loadSchema error) and a user
+// config with a bad value (mergeSchema error).
+func TestResolveUserLayerErrors(t *testing.T) {
+	t.Run("malformed user config errors", func(t *testing.T) {
+		xdg := isolateXDG(t)
+		writeFile(t, filepath.Join(xdg, "license-tool", "config.yaml"), "license: [unterminated\n")
+		repo := t.TempDir()
+		if _, err := Resolve(repo, Flags{}, Options{Interactive: false}); err == nil {
+			t.Fatal("malformed user config should error from Resolve")
+		}
+	})
+
+	t.Run("bad value in user config errors via mergeSchema", func(t *testing.T) {
+		xdg := isolateXDG(t)
+		// Valid YAML, but an invalid year value: loadSchema succeeds and mergeSchema
+		// fails, exercising the user-layer mergeSchema error wrap in Resolve.
+		writeFile(t, filepath.Join(xdg, "license-tool", "config.yaml"), "year: nope\n")
+		repo := t.TempDir()
+		_, err := Resolve(repo, Flags{}, Options{Interactive: false})
+		if err == nil {
+			t.Fatal("bad value in user config should error from Resolve")
+		}
+		// The mergeSchema wrap prefixes the offending user-config path.
+		if !strings.Contains(err.Error(), "config.yaml") {
+			t.Errorf("error should name the user config path: %v", err)
+		}
+	})
+}
+
+// TestResolveRepoLayerLoadError covers the repo-layer loadSchema error branch in
+// Resolve: a discovered .license-tool.yaml that exists but is malformed YAML.
+// This also exercises loadSchema's decode-error path (decodeYAML failure).
+func TestResolveRepoLayerLoadError(t *testing.T) {
+	isolateXDG(t)
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, repoConfigName), "license: [unterminated\n")
+	if _, err := Resolve(repo, Flags{}, Options{Interactive: false}); err == nil {
+		t.Fatal("malformed repo config should error from Resolve")
+	}
+}
+
+// TestLoadSchemaParseError covers loadSchema's parse-error branch directly: a
+// file that reads fine but fails YAML decoding.
+func TestLoadSchemaParseError(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, repoConfigName)
+	writeFile(t, p, "license: [unterminated\n")
+	_, err := loadSchema(p)
+	if err == nil {
+		t.Fatal("loadSchema of malformed yaml should error")
+	}
+	if !strings.Contains(err.Error(), "parse") {
+		t.Errorf("loadSchema parse error should mention parse: %v", err)
+	}
+}
+
+// TestFillRequiredBothPresent covers the early-return branch in fillRequired
+// where both required fields are already set (no prompt needed) on a write op.
+func TestFillRequiredBothPresent(t *testing.T) {
+	isolateXDG(t)
+	repo := t.TempDir()
+	// License + holder supplied via flags, RequireApply true: fillRequired runs but
+	// returns immediately because both fields are already populated.
+	cfg, err := Resolve(repo, Flags{License: "MIT", Holder: "Acme"}, Options{Interactive: true, RequireApply: true})
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if cfg.License != "MIT" || cfg.Holder != "Acme" {
+		t.Errorf("both-present fast path wrong: %+v", cfg)
+	}
+}
+
+// TestFillRequiredPromptReadError covers the prompt read-error branches in
+// fillRequired (license prompt and holder prompt) and in prompt itself, using a
+// reader that fails with a non-EOF error rather than returning a value.
+func TestFillRequiredPromptReadError(t *testing.T) {
+	t.Run("license prompt read error", func(t *testing.T) {
+		isolateXDG(t)
+		withPromptErrReader(t, errors.New("boom"))
+		repo := t.TempDir()
+		// Nothing pre-set: the first prompt (license) hits the read error.
+		_, err := Resolve(repo, Flags{}, Options{Interactive: true, RequireApply: true})
+		if err == nil {
+			t.Fatal("prompt read error should surface from Resolve")
+		}
+		if errors.Is(err, ErrMissingRequired) {
+			t.Fatalf("read error should be a read failure, not ErrMissingRequired: %v", err)
+		}
+		if !strings.Contains(err.Error(), "read prompt response") {
+			t.Errorf("error should be the prompt read failure: %v", err)
+		}
+	})
+
+	t.Run("holder prompt read error", func(t *testing.T) {
+		isolateXDG(t)
+		withPromptErrReader(t, errors.New("boom"))
+		repo := t.TempDir()
+		// License pre-set via flag so only the holder prompt runs and errors.
+		_, err := Resolve(repo, Flags{License: "MIT"}, Options{Interactive: true, RequireApply: true})
+		if err == nil {
+			t.Fatal("holder prompt read error should surface from Resolve")
+		}
+		if errors.Is(err, ErrMissingRequired) {
+			t.Fatalf("read error should be a read failure, not ErrMissingRequired: %v", err)
+		}
+		if !strings.Contains(err.Error(), "read prompt response") {
+			t.Errorf("error should be the prompt read failure: %v", err)
+		}
+	})
+}
+
+// TestUserConfigPathNoHome covers the userConfigPath fallback where neither
+// XDG_CONFIG_HOME nor a resolvable home directory is available, so the function
+// returns "" and the user layer is skipped. On unix os.UserHomeDir() fails when
+// $HOME is empty.
+func TestUserConfigPathNoHome(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	if got := userConfigPath(); got != "" {
+		t.Errorf("userConfigPath with no XDG/home = %q, want empty", got)
+	}
+}
+
+// TestResolveSkipsUserLayerWithoutHome confirms Resolve tolerates an absent
+// user-config path (userConfigPath == "") and still resolves from the repo layer.
+func TestResolveSkipsUserLayerWithoutHome(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: Acme\n")
+	cfg, err := Resolve(repo, Flags{}, Options{Interactive: false})
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if cfg.License != "MIT" || cfg.Holder != "Acme" {
+		t.Errorf("repo layer not resolved without user layer: %+v", cfg)
+	}
+}
+
+// TestPromptEOFWithPartialLine confirms prompt returns the trimmed partial line
+// (no error) when the reader yields data and then EOF without a trailing newline.
+func TestPromptEOFWithPartialLine(t *testing.T) {
+	withPromptIO(t, "MIT") // no trailing newline: ReadString returns ("MIT", io.EOF)
+	r := bufio.NewReader(promptReader)
+	got, err := prompt(r, "License")
+	if err != nil {
+		t.Fatalf("prompt returned error on EOF partial line: %v", err)
+	}
+	if got != "MIT" {
+		t.Errorf("prompt = %q, want MIT", got)
 	}
 }
 

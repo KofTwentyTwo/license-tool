@@ -18,7 +18,11 @@ import (
 // run executes git in path's working tree and returns trimmed stdout. WHY -C: it
 // runs git as if started in path without changing the caller's working directory,
 // so concurrent callers do not race on a shared cwd.
-func run(path string, args ...string) (string, error) {
+//
+// run is a package var so tests can substitute git's output to exercise the
+// defensive parse branches in FirstCommitYear that real git output cannot trigger.
+// The default implementation's behavior is unchanged.
+var run = func(path string, args ...string) (string, error) {
 	full := append([]string{"-C", path}, args...)
 	cmd := exec.Command("git", full...)
 	out, err := cmd.Output()

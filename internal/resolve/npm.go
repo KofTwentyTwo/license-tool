@@ -33,12 +33,12 @@ func (r *NPMResolver) Detect(path string) bool {
 // a dependency present in package.json but absent from node_modules is reported
 // unresolved rather than silently dropped.
 type packageJSON struct {
-	Name            string             `json:"name"`
-	Version         string             `json:"version"`
-	License         json.RawMessage    `json:"license"`
-	Licenses        []licenseObject    `json:"licenses"`
-	Dependencies    map[string]string  `json:"dependencies"`
-	DevDependencies map[string]string  `json:"devDependencies"`
+	Name            string            `json:"name"`
+	Version         string            `json:"version"`
+	License         json.RawMessage   `json:"license"`
+	Licenses        []licenseObject   `json:"licenses"`
+	Dependencies    map[string]string `json:"dependencies"`
+	DevDependencies map[string]string `json:"devDependencies"`
 }
 
 type licenseObject struct {

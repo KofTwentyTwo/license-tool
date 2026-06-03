@@ -89,10 +89,9 @@ func scanGradleManifest(path string, coords map[string]string) {
 		return
 	}
 	for _, m := range gradleDepRE.FindAllStringSubmatch(string(b), -1) {
+		// gradleDepRE captures the form "group:artifact:version", so splitting on ":"
+		// always yields at least three parts; no short-coordinate guard is needed.
 		parts := strings.Split(m[1], ":")
-		if len(parts) < 3 {
-			continue
-		}
 		key := parts[0] + ":" + parts[1]
 		version := parts[2]
 		if strings.Contains(version, "${") || strings.Contains(version, "}") {

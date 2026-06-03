@@ -24,6 +24,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"strings"
 	"sync"
 
@@ -83,13 +84,20 @@ func get() (*store, error) {
 }
 
 func load() (*store, error) {
+	return loadFrom(dataFS)
+}
+
+// loadFrom parses the snapshot from fsys. It is split out from load so tests can
+// drive the error and skip branches with a synthetic filesystem; production
+// always calls it with the embedded dataFS, so runtime behavior is unchanged.
+func loadFrom(fsys fs.FS) (*store, error) {
 	s := &store{
 		ids:      make(map[string]indexEntry),
 		licenses: make(map[string]model.License),
 	}
 
 	// Index (full id set).
-	idxBytes, err := dataFS.ReadFile("data/index.json")
+	idxBytes, err := fs.ReadFile(fsys, "data/index.json")
 	if err != nil {
 		return nil, fmt.Errorf("read embedded index: %w", err)
 	}
@@ -103,7 +111,7 @@ func load() (*store, error) {
 	}
 
 	// Curated per-license details (rendering set).
-	entries, err := dataFS.ReadDir("data/licenses")
+	entries, err := fs.ReadDir(fsys, "data/licenses")
 	if err != nil {
 		return nil, fmt.Errorf("read embedded licenses dir: %w", err)
 	}
@@ -111,7 +119,7 @@ func load() (*store, error) {
 		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".json") {
 			continue
 		}
-		b, err := dataFS.ReadFile("data/licenses/" + ent.Name())
+		b, err := fs.ReadFile(fsys, "data/licenses/"+ent.Name())
 		if err != nil {
 			return nil, fmt.Errorf("read embedded license %s: %w", ent.Name(), err)
 		}
@@ -135,30 +143,50 @@ func load() (*store, error) {
 // vendored index. It is intentionally permissive: any valid SPDX id is a legal
 // target even if the tool ships no rendering support for it.
 func Validate(id string) bool {
-	s, err := get()
-	if err != nil {
-		return false
+	return validateFrom(get())(id)
+}
+
+// validateFrom builds the Validate lookup closure from a get() result. Splitting
+// it out lets tests drive the load-error branch with an injected error; the
+// embedded snapshot always loads, so production behavior is unchanged.
+func validateFrom(s *store, err error) func(string) bool {
+	return func(id string) bool {
+		if err != nil {
+			return false
+		}
+		_, ok := s.ids[id]
+		return ok
 	}
-	_, ok := s.ids[id]
-	return ok
 }
 
 // Lookup returns the curated model.License for id (full text + standard header +
 // category). The bool is false when id is outside the curated rendering set, even
 // if Validate(id) is true.
 func Lookup(id string) (model.License, bool) {
-	s, err := get()
-	if err != nil {
-		return model.License{}, false
+	return lookupFrom(get())(id)
+}
+
+// lookupFrom builds the Lookup closure from a get() result, so tests can drive
+// the load-error branch with an injected error without changing production flow.
+func lookupFrom(s *store, err error) func(string) (model.License, bool) {
+	return func(id string) (model.License, bool) {
+		if err != nil {
+			return model.License{}, false
+		}
+		lic, ok := s.licenses[id]
+		return lic, ok
 	}
-	lic, ok := s.licenses[id]
-	return lic, ok
 }
 
 // ListVersion returns the SPDX license-list version this snapshot was taken from,
 // for provenance display (e.g. license-tool version output).
 func ListVersion() string {
-	s, err := get()
+	return listVersionFrom(get())
+}
+
+// listVersionFrom derives the version string from a get() result, so tests can
+// drive the load-error branch with an injected error; production is unchanged.
+func listVersionFrom(s *store, err error) string {
 	if err != nil {
 		return ""
 	}
