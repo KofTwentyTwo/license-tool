@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/KofTwentyTwo/license-tool/internal/applier"
 	"github.com/KofTwentyTwo/license-tool/internal/config"
@@ -251,19 +252,83 @@ func bindApplyFlags(cmd *cobra.Command, f *applyFlags) {
 	cmd.Flags().StringVar(&f.commitMessage, "commit-message", "", "commit message template (with --commit)")
 }
 
+// interactiveCollect is a package-level seam over collectInteractive so tests can
+// drive the init command's non-interactive flow (and inject answers) without a real
+// terminal. Production always points at the huh-backed collectInteractive.
+var interactiveCollect = collectInteractive
+
+// answersToConfig validates and converts collected init answers into a model.Config,
+// starting from the built-in Defaults so unset answers carry the documented default
+// behavior. WHY validation lives here, not in the wizard: the wizard is the
+// interactive shell (excluded from coverage); answersToConfig is the single tested
+// gate that both the TTY and flag-only paths funnel through, so an invalid license
+// or empty holder is rejected identically regardless of how the answers arrived.
+func answersToConfig(a initAnswers) (model.Config, error) {
+	if !spdx.Validate(a.License) {
+		return model.Config{}, fmt.Errorf("init: %q is not a recognized SPDX license identifier", a.License)
+	}
+	if a.Holder == "" {
+		return model.Config{}, fmt.Errorf("init: copyright holder is required")
+	}
+	cfg := config.Defaults()
+	cfg.License = a.License
+	cfg.Holder = a.Holder
+	if a.Year != "" {
+		ys, err := config.ParseYearSpec(a.Year)
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.Year = ys
+	}
+	if a.Style != "" {
+		st, err := config.ParseStyle(a.Style)
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.Style = st
+	}
+	cfg.ManageLicenseFile = a.ManageLicenseFile
+	cfg.Excludes = a.Excludes
+	return cfg, nil
+}
+
 func newInitCmd(shared *sharedFlags) *cobra.Command {
-	return &cobra.Command{
+	f := &applyFlags{}
+	cmd := &cobra.Command{
 		Use:   "init [path]",
 		Short: "Scaffold a .license-tool.yaml (interactive on a TTY)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := argPath(args)
-			// init scaffolds config; the config feature agent owns the body. We
-			// surface a clear not-yet-implemented error rather than silently no-op.
-			_, err := config.Resolve(path, sharedToFlags(shared), config.Options{Interactive: isTTY(), RequireApply: true})
-			return err
+			out := cmd.OutOrStdout()
+			a := initAnswers{
+				License:           f.license,
+				Holder:            f.holder,
+				Year:              f.year,
+				Style:             f.style,
+				ManageLicenseFile: true,
+				Excludes:          shared.exclude,
+			}
+			if err := interactiveCollect(&a, isTTY()); err != nil {
+				return err
+			}
+			cfg, err := answersToConfig(a)
+			if err != nil {
+				return err
+			}
+			target, err := config.WriteFile(path, cfg, f.force)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "wrote %s\n", target)
+			return nil
 		},
 	}
+	// bindApplyFlags already registers --force (bound to f.force); init reuses that
+	// same flag to mean "overwrite an existing .license-tool.yaml", so we do not
+	// re-register it here (cobra panics on a duplicate flag name).
+	bindApplyFlags(cmd, f)
+	return cmd
 }
 
 func newVersionCmd(info buildInfo) *cobra.Command {
@@ -361,11 +426,11 @@ func applyToFlags(s *sharedFlags, f *applyFlags) config.Flags {
 }
 
 // isTTY reports whether stdin is an interactive terminal, gating interactive
-// prompts (off in CI). It is a conservative check on the character-device bit.
+// prompts (off in CI). WHY term.IsTerminal over an os.ModeCharDevice bit check:
+// the mode-bit test treats every character device as a terminal, so redirecting
+// from /dev/null (or any other char device, common in CI and shell pipelines)
+// wrongly enters the interactive wizard. term.IsTerminal issues the actual
+// terminal ioctl, so 'init </dev/null' is correctly seen as non-interactive.
 func isTTY() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }

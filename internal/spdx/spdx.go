@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"sort"
 	"strings"
 	"sync"
 
@@ -191,6 +192,57 @@ func listVersionFrom(s *store, err error) string {
 		return ""
 	}
 	return s.version
+}
+
+// IDs returns every non-deprecated SPDX identifier in the vendored index, sorted.
+// WHY non-deprecated only: deprecated ids (e.g. "GPL-3.0", "AGPL-3.0") are legal to
+// validate for existing headers but must not be offered as new choices, so the
+// interactive picker that consumes this list never steers a user onto a deprecated
+// id. Returns nil on a snapshot load error so callers degrade to an empty picker
+// rather than panicking; the embedded snapshot always loads in production.
+func IDs() []string {
+	return idsFrom(get())
+}
+
+// idsFrom builds the sorted, deprecation-free id list from a get() result, so tests
+// can drive the load-error branch with an injected error. Production always loads the
+// embedded snapshot, so the error arm is otherwise unreachable; on error it returns
+// nil so the picker degrades to empty rather than panicking.
+func idsFrom(s *store, err error) []string {
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(s.ids))
+	for id, e := range s.ids {
+		if e.IsDeprecatedLicenseID {
+			continue
+		}
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// CommonIDs returns a curated, display-ordered shortlist of the licenses users pick
+// most often. WHY a hand-ordered slice rather than a sorted subset of IDs: the order
+// is editorial (most-recommended first, permissive before copyleft), so the picker
+// can surface sensible defaults at the top before the full alphabetical long tail.
+func CommonIDs() []string {
+	return []string{
+		"MIT",
+		"Apache-2.0",
+		"BSD-3-Clause",
+		"BSD-2-Clause",
+		"ISC",
+		"MPL-2.0",
+		"GPL-3.0-or-later",
+		"GPL-2.0-only",
+		"LGPL-3.0-or-later",
+		"AGPL-3.0-or-later",
+		"AGPL-3.0-only",
+		"Unlicense",
+		"CC0-1.0",
+	}
 }
 
 // classify maps a curated SPDX id to its model.Category. AGPL is both strong and

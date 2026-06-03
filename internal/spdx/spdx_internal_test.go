@@ -161,6 +161,8 @@ func TestAccessorsWithLoadError(t *testing.T) {
 	assert.Equal(t, model.License{}, lic, "Lookup must return the zero License on load error")
 
 	assert.Equal(t, "", listVersionFrom(nil, errStore), "ListVersion must be empty on load error")
+
+	assert.Nil(t, idsFrom(nil, errStore), "IDs must be nil on load error so the picker degrades to empty")
 }
 
 // TestAccessorsFromHelpersHappyPath confirms the extracted helpers preserve the

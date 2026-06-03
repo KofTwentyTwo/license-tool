@@ -417,6 +417,11 @@ func renderText(w io.Writer, r model.Report) error {
 	bw.printf("root: %s\n", r.Root)
 	bw.printf("license: %s   holder: %s   style: %s\n\n", orNone(r.Config.License), orNone(r.Config.Holder), r.Config.Style)
 
+	// Findings summary first: a concise by-finding overview (coverage, license mix,
+	// unknowns, copyleft, deps, policy) so a reader sees the verdict before the
+	// detailed by-SPDX / by-category / by-file-type breakdowns below.
+	renderFindings(bw, buildFindings(r))
+
 	bw.printf("result: %s\n\n", passLabel(r.Passed))
 
 	bw.printf("by SPDX id:\n")

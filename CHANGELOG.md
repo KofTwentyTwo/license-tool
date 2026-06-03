@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-03
+
+### Added
+- `init`: interactive wizard (charmbracelet/huh) to scaffold `.license-tool.yaml` — filterable SPDX license picker (common licenses first), holder/year/style prompts with validation, and an overwrite guard; non-TTY path uses flags
+- `audit`: findings-summary block at the top of the text report (source files headered/missing, license types, unknown, copyleft flags, dependencies resolved/unresolved, policy PASS/FAIL)
+
+### Fixed
+- `isTTY` now uses `golang.org/x/term` so `/dev/null` and other char devices are not mistaken for a terminal (correct non-interactive behavior in CI/scripts)
+
 ## [0.1.1] - 2026-06-03
 
 ### Fixed

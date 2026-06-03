@@ -188,6 +188,88 @@ func LoadFile(filename string) (model.Config, error) {
 	return cfg, nil
 }
 
+// RenderFile serializes cfg into the on-disk .license-tool.yaml byte form. It is
+// pure (no I/O) so callers can preview the scaffold or test the exact bytes without
+// touching the filesystem. WHY it mirrors fileSchema rather than marshaling the
+// model directly: the YAML keys, the *bool nullability of manage_license_file, and
+// the string tokenization of enums (style, year, fail_on) are the documented file
+// contract, and round-tripping through fileSchema keeps init's output identical to
+// what mergeSchema reads back.
+func RenderFile(cfg model.Config) ([]byte, error) {
+	fs := fileSchema{
+		License:           cfg.License,
+		Holder:            cfg.Holder,
+		Year:              yearSpecRaw(cfg.Year),
+		Style:             cfg.Style.String(),
+		ManageLicenseFile: &cfg.ManageLicenseFile,
+		Exclude:           cfg.Excludes,
+	}
+	// Only emit a policy block when the config actually carries policy intent, so a
+	// freshly scaffolded file is not cluttered with an empty policy the user did not set.
+	if cfg.Policy.Required != "" || len(cfg.Policy.Allow) > 0 || len(cfg.Policy.Deny) > 0 || len(cfg.Policy.FailOn) > 0 {
+		fs.Policy = policySchema{
+			Required: cfg.Policy.Required,
+			Allow:    cfg.Policy.Allow,
+			Deny:     cfg.Policy.Deny,
+			FailOn:   failConditionsToTokens(cfg.Policy.FailOn),
+		}
+	}
+	return yaml.Marshal(fs)
+}
+
+// renderFile is a package-level seam over RenderFile so WriteFile's render-error
+// branch is reachable in tests. RenderFile cannot fail for any real model.Config
+// (yaml.Marshal of the fixed fileSchema is total), so the only way to exercise the
+// error path is to inject a failing renderer here. Production always points at the
+// real RenderFile, leaving runtime behavior unchanged.
+var renderFile = RenderFile
+
+// WriteFile renders cfg and writes it to <path>/.license-tool.yaml, returning the
+// written target path. WHY the force guard: init must never silently clobber a
+// committed config, so an existing target is a hard error unless the caller opted in
+// with force (the --force flag). The 0o644 mode matches a normal committed text file.
+func WriteFile(path string, cfg model.Config, force bool) (string, error) {
+	target := filepath.Join(path, repoConfigName)
+	if !force && fileExists(target) {
+		return "", fmt.Errorf("config: %s already exists (use --force)", target)
+	}
+	data, err := renderFile(cfg)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(target, data, 0o644); err != nil {
+		return "", fmt.Errorf("config: write %s: %w", target, err)
+	}
+	return target, nil
+}
+
+// yearSpecRaw renders a YearSpec back to its config token, the inverse of
+// ParseYearSpec. WHY YearGit is the default arm: it is the built-in default Kind, so
+// any unrecognized/zero-value spec serializes to the safe "git" token rather than an
+// empty string that would round-trip back to a parse error.
+func yearSpecRaw(y model.YearSpec) string {
+	switch y.Kind {
+	case model.YearCurrent:
+		return "current"
+	case model.YearExplicit:
+		return strconv.Itoa(y.Start)
+	case model.YearRange:
+		return strconv.Itoa(y.Start) + "-" + strconv.Itoa(y.End)
+	default: // model.YearGit and any zero value.
+		return "git"
+	}
+}
+
+// failConditionsToTokens renders fail conditions back to their config tokens, the
+// inverse of parseFailConditions, so a scaffolded fail_on list round-trips exactly.
+func failConditionsToTokens(fcs []model.FailCondition) []string {
+	out := make([]string, 0, len(fcs))
+	for _, fc := range fcs {
+		out = append(out, fc.String())
+	}
+	return out
+}
+
 // loadSchema reads and decodes a YAML config file into the on-disk schema.
 func loadSchema(filename string) (fileSchema, error) {
 	data, err := os.ReadFile(filename)
