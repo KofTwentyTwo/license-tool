@@ -19,8 +19,8 @@ func header(id string) model.DetectedHeader {
 	return model.DetectedHeader{Present: true, SPDXID: id}
 }
 
-// failErr is a sentinel error fakes return to exercise the error branches.
-var failErr = errors.New("boom")
+// errBoom is a sentinel error fakes return to exercise the error branches.
+var errBoom = errors.New("boom")
 
 // ----- ParseFormat / Format.String -----
 
@@ -265,13 +265,13 @@ func TestAuditRequiresEnumerate(t *testing.T) {
 func TestAuditEnumerateError(t *testing.T) {
 	pipe := Pipeline{
 		Enumerate: func(root string, excludes []string) ([]SourceFile, error) {
-			return nil, failErr
+			return nil, errBoom
 		},
 	}
 	_, err := Audit("/repo", model.Config{}, Options{}, pipe)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "enumerate")
-	assert.ErrorIs(t, err, failErr)
+	assert.ErrorIs(t, err, errBoom)
 }
 
 func TestAuditHappyPathWithDetectionAndDeps(t *testing.T) {
@@ -350,7 +350,7 @@ func TestAuditDetectErrorRecordedNotFatal(t *testing.T) {
 		},
 		Detect: func(content []byte, ft model.FileType) (model.DetectedHeader, error) {
 			if string(content) == "x" {
-				return model.DetectedHeader{}, failErr
+				return model.DetectedHeader{}, errBoom
 			}
 			return header("MIT"), nil
 		},
@@ -360,7 +360,7 @@ func TestAuditDetectErrorRecordedNotFatal(t *testing.T) {
 	require.Len(t, r.Files, 2)
 
 	// The detect error is recorded on the file and the run continued.
-	assert.Equal(t, failErr.Error(), r.Files[0].Err)
+	assert.Equal(t, errBoom.Error(), r.Files[0].Err)
 	assert.Empty(t, r.Files[0].Violations) // errored files get no policy verdict
 
 	// The second file detected normally.
@@ -388,14 +388,14 @@ func TestAuditResolveDepsError(t *testing.T) {
 			return nil, nil
 		},
 		ResolveDeps: func(root string, allowToolShellOut bool) ([]model.DependencyLicense, error) {
-			return nil, failErr
+			return nil, errBoom
 		},
 	}
 	opts := Options{IncludeDeps: true, ResolveDeps: "ondisk"}
 	_, err := Audit("/repo", model.Config{}, opts, pipe)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve dependencies")
-	assert.ErrorIs(t, err, failErr)
+	assert.ErrorIs(t, err, errBoom)
 }
 
 func TestAuditDepsDisabledPaths(t *testing.T) {
@@ -497,7 +497,7 @@ func TestCheckExitCodes(t *testing.T) {
 	}
 	errPipe := Pipeline{
 		Enumerate: func(root string, excludes []string) ([]SourceFile, error) {
-			return nil, failErr
+			return nil, errBoom
 		},
 	}
 
@@ -840,7 +840,7 @@ type failingWriter struct {
 
 func (f *failingWriter) Write(p []byte) (int, error) {
 	if f.remaining <= 0 {
-		return 0, failErr
+		return 0, errBoom
 	}
 	f.remaining--
 	return len(p), nil
@@ -874,7 +874,7 @@ func TestErrWriterStopsAfterFirstError(t *testing.T) {
 	bw.printf("second err\n")    // fails, captures err
 	bw.printf("third skipped\n") // no-op via early return
 	require.Error(t, bw.err)
-	assert.ErrorIs(t, bw.err, failErr)
+	assert.ErrorIs(t, bw.err, errBoom)
 }
 
 // ----- package-private orchestration seams (declared for the integration layer) -----

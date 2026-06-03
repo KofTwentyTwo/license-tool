@@ -102,8 +102,8 @@ func loadFrom(fsys fs.FS) (*store, error) {
 		return nil, fmt.Errorf("read embedded index: %w", err)
 	}
 	var idx indexFile
-	if err := json.Unmarshal(idxBytes, &idx); err != nil {
-		return nil, fmt.Errorf("parse embedded index: %w", err)
+	if uerr := json.Unmarshal(idxBytes, &idx); uerr != nil {
+		return nil, fmt.Errorf("parse embedded index: %w", uerr)
 	}
 	s.version = idx.LicenseListVersion
 	for _, e := range idx.Licenses {

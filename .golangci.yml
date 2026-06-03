@@ -28,6 +28,14 @@ linters:
       # Reading from os.Stdout/Stderr and similar are not worth gating on.
       check-type-assertions: true
       check-blank: false
+      # Writes to command output streams and best-effort cleanup in defers have no
+      # actionable recovery here, so they are not worth gating on.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*os.File).Close
+        - os.Remove
     revive:
       severity: warning
       rules:
