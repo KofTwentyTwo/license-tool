@@ -611,13 +611,16 @@ func TestIsTTY(t *testing.T) {
 	orig := os.Stdin
 	t.Cleanup(func() { os.Stdin = orig })
 
-	t.Run("character device is a TTY", func(t *testing.T) {
-		// /dev/null is a character device, exercising the ModeCharDevice branch.
+	// WHY /dev/null must NOT be a TTY: the previous os.ModeCharDevice check treated
+	// every character device (including /dev/null) as a terminal, so 'init </dev/null'
+	// and CI wrongly entered the interactive wizard. term.IsTerminal issues the real
+	// terminal ioctl, so a char device that is not a terminal is correctly rejected.
+	t.Run("character device is not a TTY", func(t *testing.T) {
 		f, err := os.Open(os.DevNull)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = f.Close() })
 		os.Stdin = f
-		assert.True(t, isTTY())
+		assert.False(t, isTTY())
 	})
 
 	t.Run("regular file is not a TTY", func(t *testing.T) {
@@ -629,8 +632,9 @@ func TestIsTTY(t *testing.T) {
 		assert.False(t, isTTY())
 	})
 
-	t.Run("stat error is not a TTY", func(t *testing.T) {
-		// A closed descriptor makes Stat fail, exercising the err != nil branch.
+	t.Run("closed descriptor is not a TTY", func(t *testing.T) {
+		// A closed descriptor cannot be a terminal; the ioctl fails and IsTerminal
+		// reports false.
 		f, err := os.Open(os.DevNull)
 		require.NoError(t, err)
 		require.NoError(t, f.Close())

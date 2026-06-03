@@ -1,6 +1,6 @@
 module github.com/KofTwentyTwo/license-tool
 
-go 1.24
+go 1.25.0
 
 require (
 	github.com/charmbracelet/huh v1.0.0
@@ -10,6 +10,7 @@ require (
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/term v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -42,6 +43,6 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/sync v0.15.0 // indirect
-	golang.org/x/sys v0.33.0 // indirect
+	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 )

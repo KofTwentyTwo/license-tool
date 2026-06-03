@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/KofTwentyTwo/license-tool/internal/applier"
 	"github.com/KofTwentyTwo/license-tool/internal/config"
@@ -425,11 +426,11 @@ func applyToFlags(s *sharedFlags, f *applyFlags) config.Flags {
 }
 
 // isTTY reports whether stdin is an interactive terminal, gating interactive
-// prompts (off in CI). It is a conservative check on the character-device bit.
+// prompts (off in CI). WHY term.IsTerminal over an os.ModeCharDevice bit check:
+// the mode-bit test treats every character device as a terminal, so redirecting
+// from /dev/null (or any other char device, common in CI and shell pipelines)
+// wrongly enters the interactive wizard. term.IsTerminal issues the actual
+// terminal ioctl, so 'init </dev/null' is correctly seen as non-interactive.
 func isTTY() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
