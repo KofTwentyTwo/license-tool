@@ -24,7 +24,9 @@ func requireGit(t *testing.T) {
 func gitInit(t *testing.T, root string) {
 	t.Helper()
 	for _, args := range [][]string{
-		{"init", "-q"},
+		// -b main pins the initial branch so tests that checkout "main" work
+		// regardless of the host git's init.defaultBranch (CI defaults to master).
+		{"init", "-q", "-b", "main"},
 		{"config", "user.email", "test@example.com"},
 		{"config", "user.name", "Test"},
 		{"config", "commit.gpgsign", "false"},
