@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+      - release/**
+      - rc/**
+  push:
+    branches:
+      - develop
+      - main
+      - release/**
+      - rc/**
+
+permissions:
+  contents: read
+
+jobs:
+  go-checks:
+    name: Go checks
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+
+      - name: Run tests
+        run: go test ./... -race -cover
+
+      - name: Build
+        run: go build ./...
+
+  macos-build:
+    name: macOS branch build
+    runs-on: macos-15
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Build binary
+        run: go build -o license-tool ./cmd/license-tool
+
+      - name: Upload branch binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: license-tool-${{ github.run_id }}-${{ github.sha }}-macos
+          path: license-tool
+          if-no-files-found: error
+
+  windows-build:
+    name: Windows branch build
+    runs-on: windows-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Build binary
+        run: go build -o license-tool.exe ./cmd/license-tool
+
+      - name: Upload branch binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: license-tool-${{ github.run_id }}-${{ github.sha }}-windows
+          path: license-tool.exe
+          if-no-files-found: error

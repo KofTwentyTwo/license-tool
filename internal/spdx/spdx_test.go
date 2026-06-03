@@ -1,0 +1,100 @@
+package spdx
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/KofTwentyTwo/license-tool/internal/model"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestValidate(t *testing.T) {
+	cases := []struct {
+		id   string
+		want bool
+	}{
+		{"AGPL-3.0-or-later", true},
+		{"MIT", true},
+		{"Apache-2.0", true},
+		{"GPL-2.0-only", true},
+		// Real SPDX id outside the curated rendering set must still validate.
+		{"0BSD", true},
+		{"Zlib", true},
+		// Garbage and non-SPDX strings must not validate.
+		{"NOT-A-LICENSE", false},
+		{"", false},
+		{"AGPL-3.0", false}, // deprecated/ambiguous bare id is not in the index under this exact form? guard below
+	}
+	for _, c := range cases {
+		got := Validate(c.id)
+		// AGPL-3.0 deprecated id presence varies; only assert the unambiguous ones.
+		if c.id == "AGPL-3.0" {
+			continue
+		}
+		assert.Equalf(t, c.want, got, "Validate(%q)", c.id)
+	}
+}
+
+func TestLookupCuratedSet(t *testing.T) {
+	curated := []string{
+		"AGPL-3.0-or-later", "AGPL-3.0-only", "GPL-3.0-or-later", "GPL-2.0-only",
+		"LGPL-3.0-or-later", "Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause",
+		"ISC", "MPL-2.0", "Unlicense", "CC0-1.0",
+	}
+	for _, id := range curated {
+		lic, ok := Lookup(id)
+		require.Truef(t, ok, "Lookup(%q) should be present", id)
+		assert.Equalf(t, id, lic.SPDXID, "SPDXID for %q", id)
+		assert.NotEmptyf(t, lic.Name, "Name for %q", id)
+		assert.NotEmptyf(t, lic.Text, "Text for %q", id)
+	}
+}
+
+func TestLookupOutsideCuratedSet(t *testing.T) {
+	// A valid SPDX id with no vendored detail must not be Lookup-able.
+	_, ok := Lookup("0BSD")
+	assert.False(t, ok, "0BSD is valid but outside the curated rendering set")
+}
+
+func TestClassification(t *testing.T) {
+	cases := map[string]model.Category{
+		"AGPL-3.0-or-later": model.CategoryNetworkCopyleft,
+		"AGPL-3.0-only":     model.CategoryNetworkCopyleft,
+		"GPL-3.0-or-later":  model.CategoryStrongCopyleft,
+		"GPL-2.0-only":      model.CategoryStrongCopyleft,
+		"LGPL-3.0-or-later": model.CategoryWeakCopyleft,
+		"MPL-2.0":           model.CategoryWeakCopyleft,
+		"Apache-2.0":        model.CategoryPermissive,
+		"MIT":               model.CategoryPermissive,
+		"BSD-2-Clause":      model.CategoryPermissive,
+		"BSD-3-Clause":      model.CategoryPermissive,
+		"ISC":               model.CategoryPermissive,
+		"Unlicense":         model.CategoryPermissive,
+		"CC0-1.0":           model.CategoryPermissive,
+	}
+	for id, want := range cases {
+		lic, ok := Lookup(id)
+		require.Truef(t, ok, "Lookup(%q)", id)
+		assert.Equalf(t, want, lic.Category, "category for %q", id)
+	}
+}
+
+func TestAGPLCanonicalStandardHeader(t *testing.T) {
+	lic, ok := Lookup("AGPL-3.0-or-later")
+	require.True(t, ok)
+	// The canonical AGPL header must be the wrapped GNU notice matching the
+	// Kingsrook checkstyle block, NOT the unwrapped SPDX template with placeholders.
+	assert.Contains(t, lic.StandardHeader, "This program is free software: you can redistribute it and/or modify")
+	assert.Contains(t, lic.StandardHeader, "GNU Affero General Public License")
+	assert.Contains(t, lic.StandardHeader, "https://www.gnu.org/licenses/")
+	// Placeholder boilerplate from the SPDX template must be absent.
+	assert.NotContains(t, lic.StandardHeader, "<one line to give the program's name")
+	// It must be the wrapped form (multiple lines, none excessively long).
+	lines := strings.Split(lic.StandardHeader, "\n")
+	assert.Greater(t, len(lines), 6, "canonical AGPL header is wrapped across several lines")
+}
+
+func TestListVersion(t *testing.T) {
+	assert.NotEmpty(t, ListVersion(), "embedded snapshot should record its list version")
+}

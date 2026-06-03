@@ -1,0 +1,75 @@
+# GoReleaser configuration for license-tool.
+# https://goreleaser.com
+#
+# Build matrix: darwin/linux arm64+amd64 and windows amd64 (windows arm64 is excluded
+# because it is not a target we ship). Archives are tar.gz everywhere except Windows,
+# which uses zip. Version metadata is injected into package main via -ldflags so there is
+# no version constant to maintain in source.
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: license-tool
+    main: ./cmd/license-tool
+    binary: license-tool
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .Date }}
+
+archives:
+  - id: license-tool
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  # Mark tags carrying a prerelease suffix (e.g. v1.2.3-rc.1) as GitHub prereleases.
+  prerelease: auto
+
+changelog:
+  use: github
+
+brews:
+  - name: license-tool
+    repository:
+      owner: KofTwentyTwo
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/KofTwentyTwo/license-tool
+    description: "Audit and standardize license headers and metadata across codebases"
+    license: MIT
+    commit_author:
+      name: github-actions[bot]
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+    test: |
+      system "#{bin}/license-tool", "version"
