@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -104,8 +105,8 @@ func newAuditCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return usageError(err)
 			}
-			if err := validateResolveDeps(f.resolveDeps); err != nil {
-				return usageError(err)
+			if validateErr := validateResolveDeps(f.resolveDeps); validateErr != nil {
+				return usageError(validateErr)
 			}
 			r, err := report.Audit(path, cfg, report.Options{
 				Format:            format,
@@ -139,9 +140,9 @@ func newCheckCmd(shared *sharedFlags) *cobra.Command {
 				return usageError(err)
 			}
 			if cmd.Flags().Changed("fail-on") {
-				failOn, err := parseFailOnFlags(f.failOn)
-				if err != nil {
-					return usageError(err)
+				failOn, parseErr := parseFailOnFlags(f.failOn)
+				if parseErr != nil {
+					return usageError(parseErr)
 				}
 				cfg.Policy.FailOn = failOn
 			}
@@ -149,8 +150,8 @@ func newCheckCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return usageError(err)
 			}
-			if err := validateResolveDeps(f.resolveDeps); err != nil {
-				return usageError(err)
+			if validateErr := validateResolveDeps(f.resolveDeps); validateErr != nil {
+				return usageError(validateErr)
 			}
 			r, err := report.Audit(path, cfg, report.Options{
 				Format:            format,
@@ -305,6 +306,10 @@ func writeOrInternalError(err error) error {
 	return internalError(err)
 }
 
+var createReportFile = func(name string) (io.WriteCloser, error) {
+	return os.Create(name)
+}
+
 func renderCommandReport(cmd *cobra.Command, output string, r model.Report, format report.Format) error {
 	if output == "" {
 		if err := report.Render(cmd.OutOrStdout(), r, format); err != nil {
@@ -313,7 +318,7 @@ func renderCommandReport(cmd *cobra.Command, output string, r model.Report, form
 		return nil
 	}
 
-	f, err := os.Create(output)
+	f, err := createReportFile(output)
 	if err != nil {
 		return internalError(fmt.Errorf("report: create output %s: %w", output, err))
 	}
@@ -489,7 +494,7 @@ func buildAuditPipeline(cfg model.Config, shared *sharedFlags) report.Pipeline {
 	classify := config.ContentLookupFunc(cfg)
 	return report.Pipeline{
 		Enumerate: func(root string, excludes []string) ([]report.SourceFile, error) {
-			entries, err := enumerate.EnumerateContent(root, enumerate.Options{
+			entries, err := enumerate.WithContent(root, enumerate.Options{
 				Includes:    shared.include,
 				Excludes:    excludes,
 				NoGitignore: shared.noGitignore,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1012,6 +1013,23 @@ func TestRenderCommandReportErrors(t *testing.T) {
 	err = renderCommandReport(root, filepath.Join(t.TempDir(), "report.txt"), model.Report{}, report.Format(99))
 	require.Error(t, err)
 	assert.Equal(t, exitInternal, exitCode(err))
+
+	orig := createReportFile
+	createReportFile = func(string) (io.WriteCloser, error) {
+		return closeErrorWriter{closeErr: errors.New("close failed")}, nil
+	}
+	t.Cleanup(func() { createReportFile = orig })
+
+	err = renderCommandReport(root, filepath.Join(t.TempDir(), "report.txt"), model.Report{}, report.FormatText)
+	require.Error(t, err)
+	assert.Equal(t, exitInternal, exitCode(err))
+	assert.Contains(t, err.Error(), "close failed")
+}
+
+func TestWriteOrInternalErrorClassifiesUnexpectedErrors(t *testing.T) {
+	err := writeOrInternalError(errors.New("disk full"))
+	require.Error(t, err)
+	assert.Equal(t, exitInternal, exitCode(err))
 }
 
 func TestLicenseSelectOptions(t *testing.T) {
@@ -1136,4 +1154,16 @@ type errorWriter struct {
 
 func (w errorWriter) Write([]byte) (int, error) {
 	return 0, w.err
+}
+
+type closeErrorWriter struct {
+	closeErr error
+}
+
+func (w closeErrorWriter) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func (w closeErrorWriter) Close() error {
+	return w.closeErr
 }

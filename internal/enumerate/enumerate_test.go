@@ -345,12 +345,12 @@ func TestEnumerateNonGitConfigOverrides(t *testing.T) {
 	assert.Equal(t, reasonUnknownType, other.SkipReason)
 }
 
-func TestEnumerateContentDetectsExtensionlessShebang(t *testing.T) {
+func TestWithContentDetectsExtensionlessShebang(t *testing.T) {
 	root := t.TempDir()
 
 	writeFile(t, root, "tool", "#!/usr/bin/env python3\nprint('ok')\n")
 
-	entries, err := EnumerateContent(root, Options{}, filetype.LookupContent)
+	entries, err := WithContent(root, Options{}, filetype.LookupContent)
 	require.NoError(t, err)
 	byPath := indexEntries(entries)
 
@@ -359,7 +359,7 @@ func TestEnumerateContentDetectsExtensionlessShebang(t *testing.T) {
 	assert.Equal(t, "Python", tool.FileType.Name)
 }
 
-func TestEnumerateContentSkipAndOverrideBehavior(t *testing.T) {
+func TestWithContentSkipAndOverrideBehavior(t *testing.T) {
 	root := t.TempDir()
 
 	writeFile(t, root, "unknown-script", "#!/usr/bin/env mystery\nrun\n")
@@ -376,7 +376,7 @@ func TestEnumerateContentSkipAndOverrideBehavior(t *testing.T) {
 		},
 	})
 
-	entries, err := EnumerateContent(root, Options{}, classify)
+	entries, err := WithContent(root, Options{}, classify)
 	require.NoError(t, err)
 	byPath := indexEntries(entries)
 

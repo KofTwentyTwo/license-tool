@@ -96,7 +96,7 @@ func Apply(path string, cfg model.Config, opts Options) (model.Report, error) {
 		})
 	}
 
-	entries, err := enumerate.EnumerateContent(path, enumerate.Options{
+	entries, err := enumerate.WithContent(path, enumerate.Options{
 		Includes:    opts.Includes,
 		Excludes:    cfg.Excludes,
 		NoGitignore: opts.NoGitignore,

@@ -50,6 +50,8 @@ type Entry struct {
 	SkipReason string
 }
 
+// ContentClassifier classifies a path using the leading file bytes when the path
+// alone is not enough, such as extensionless scripts with a shebang.
 type ContentClassifier func(path string, head []byte) (model.FileType, bool)
 
 // skip reasons surfaced to the report. WHY centralized: detect.go and report.go key
@@ -85,9 +87,9 @@ func Enumerate(root string, opts Options, classify func(path string) (model.File
 	}, false)
 }
 
-// EnumerateContent is the content-aware variant of Enumerate. It reads the leading
+// WithContent is the content-aware variant of Enumerate. It reads the leading
 // bytes once, passes them to classify, and reuses them for the binary check.
-func EnumerateContent(root string, opts Options, classify ContentClassifier) ([]Entry, error) {
+func WithContent(root string, opts Options, classify ContentClassifier) ([]Entry, error) {
 	return enumerate(root, opts, classify, true)
 }
 
