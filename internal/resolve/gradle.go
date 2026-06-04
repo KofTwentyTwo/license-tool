@@ -50,16 +50,24 @@ func (r *GradleResolver) Detect(path string) bool {
 // It is deliberately a surface scan, not a full Gradle model build: detect-only.
 var gradleDepRE = regexp.MustCompile(`["']([\w.\-]+:[\w.\-]+:[\w.\-${}]+)["']`)
 
+const (
+	gradleOnDiskReason = "gradle on-disk dependency-license resolution is not supported (detect-only; no on-disk license metadata, no network fetch)"
+	gradleToolReason   = "Gradle tool-tier dependency-license resolution is not supported; this resolver remains detect-only and does not shell out"
+)
+
 // Resolve implements model.Resolver. It surface-scans the build script(s) for
 // dependency coordinates and returns each as an unresolved DependencyLicense with
-// a reason. It never resolves a license: Gradle resolution is out of scope for v1.
+// a reason. It never resolves a license: Gradle resolution is detect-only.
 func (r *GradleResolver) Resolve(path string, opts model.ResolveOptions) ([]model.DependencyLicense, error) {
 	coords := map[string]string{} // coordinate "group:artifact" -> version
 	for _, m := range gradleManifests {
 		scanGradleManifest(filepath.Join(path, m), coords)
 	}
 
-	const reason = "gradle dependency-license resolution not implemented in v1 (detect-only; no on-disk license metadata, no network fetch)"
+	reason := gradleOnDiskReason
+	if opts.AllowToolShellOut {
+		reason = gradleToolReason
+	}
 
 	names := make([]string, 0, len(coords))
 	for n := range coords {

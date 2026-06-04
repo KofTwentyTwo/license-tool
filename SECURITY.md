@@ -4,20 +4,24 @@
 
 | Version | Supported |
 | ------- | --------- |
-| 1.0.x   | yes       |
-| 0.x     | no        |
+| Latest published release | yes |
+| Older releases | no |
+| Unreleased branch builds and snapshots | no |
+
+`license-tool` is currently pre-1.0. Security fixes are released on the latest
+published release line, and users should upgrade to the newest GitHub Release when
+a fix is published.
 
 ## Reporting A Vulnerability
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Instead, please use one of the following methods:
+Use GitHub's private vulnerability reporting flow from the repository security
+policy page:
 
-1. **GitHub Security Advisories**: Create a private security advisory at
-   `https://github.com/KofTwentyTwo/license-tool/security/advisories`
-
-2. **PGP Encryption**: If you have the maintainer's PGP public key,
-   encrypt your report and send it via email.
+```text
+https://github.com/KofTwentyTwo/license-tool/security/policy
+```
 
 ### What To Include
 

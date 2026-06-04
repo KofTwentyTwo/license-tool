@@ -72,7 +72,7 @@ dependencies {
 		names = append(names, d.Name)
 		assert.Equal(t, model.ResolutionUnresolved, d.Resolution)
 		assert.Equal(t, "gradle", d.Ecosystem)
-		assert.Contains(t, d.Reason, "not implemented in v1")
+		assert.Contains(t, d.Reason, "detect-only")
 	}
 
 	// Sorted and deduplicated.
@@ -88,6 +88,20 @@ dependencies {
 	assert.Equal(t, "31.1-jre", byName["com.google.guava:guava"].Version)
 	assert.Equal(t, "6.1.0", byName["org.springframework:spring-core"].Version)
 	assert.Empty(t, byName["org.example:propver"].Version)
+}
+
+func TestGradleResolveToolTierReason(t *testing.T) {
+	dir := t.TempDir()
+	content := `dependencies { implementation 'com.google.guava:guava:31.1-jre' }`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "build.gradle"), []byte(content), 0o644))
+
+	r := &GradleResolver{}
+	out, err := r.Resolve(dir, model.ResolveOptions{AllowToolShellOut: true})
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+
+	assert.Equal(t, model.ResolutionUnresolved, out[0].Resolution)
+	assert.Equal(t, "Gradle tool-tier dependency-license resolution is not supported; this resolver remains detect-only and does not shell out", out[0].Reason)
 }
 
 // TestGradleResolveNoManifest verifies Resolve on a directory with no build script

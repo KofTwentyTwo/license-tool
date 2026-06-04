@@ -52,11 +52,18 @@ license-tool audit
 license-tool audit ./some/repo
 license-tool audit --format json --output audit.json
 license-tool audit --format markdown --output LICENSE-AUDIT.md
-license-tool audit --no-deps
+license-tool audit --deps=false
 license-tool audit --resolve-deps tool
 ```
 
 Audit output is read-only. Audit always prints a "not legal advice" disclaimer.
+Dependency audit discovers manifests in the root and in subdirectories, while
+honoring git, `.gitignore`, configured excludes, and common vendor-heavy
+directories such as `node_modules`, `vendor`, `build`, `dist`, and `.gradle`.
+The default `ondisk` tier reads already-resolved metadata. The `tool` tier
+currently augments Maven resolution only; npm uses installed `node_modules`
+metadata, and Gradle remains detect-only with an explicit unsupported-tool-tier
+reason in the dependency report.
 
 ### check
 
@@ -160,6 +167,12 @@ The risky code paths are covered by tests:
 - Idempotency and relicense (apply twice equals once; AGPL to Apache replaces and never stacks).
 - Header detection (recognize an existing license header; never touch a non-license doc comment).
 - Audit/check policy and exit-code matrix, including the `unresolved` dependency path.
+
+## Support
+
+Use [GitHub Issues](https://github.com/KofTwentyTwo/license-tool/issues) for public
+bug reports, feature requests, and documentation defects. Do not report security
+vulnerabilities in public issues; follow [SECURITY.md](SECURITY.md) instead.
 
 ## Release Automation
 
