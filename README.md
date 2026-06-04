@@ -153,7 +153,7 @@ overwrite it unless `--force` is passed.
 
 ## Configuration
 
-Configuration is layered. Precedence, high to low: flags, the per-repo `.license-tool.yaml`, the user/global config (`$XDG_CONFIG_HOME/license-tool/config.yaml`), then built-in defaults. The committed `.license-tool.yaml` declares the repo's license identity and doubles as the `check` expectation. For `init`, missing required fields prompt through the wizard on a TTY; non-TTY runs skip the wizard, use flags only, and report missing or invalid values as usage errors.
+Configuration is layered. Precedence, high to low: flags, the per-repo `.license-tool.yaml`, the user/global config (`$XDG_CONFIG_HOME/license-tool/config.yaml`), then built-in defaults. The committed `.license-tool.yaml` declares the repo's license identity and doubles as the `check` expectation. `include` uses the highest non-empty layer, while `exclude` accumulates across layers. For `init`, missing required fields prompt through the wizard on a TTY; non-TTY runs skip the wizard, use flags only, and report missing or invalid values as usage errors.
 
 ```yaml
 # .license-tool.yaml (committed per repo; doubles as the check expectation)
@@ -162,6 +162,8 @@ holder: "Kingsrook, LLC"          # copyright holder
 year: git                         # current | YYYY | YYYY-YYYY | git
 style: reuse+notice               # reuse | notice | reuse+notice
 manage_license_file: true         # write top-level LICENSE + LICENSES/<id>.txt
+include:                          # optional globs limiting files considered
+  - "src/**"
 exclude:                          # gitignore-style, in addition to .gitignore
   - "**/generated/**"
   - "**/*.pb.go"

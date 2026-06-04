@@ -223,7 +223,7 @@ func newApplyCmd(shared *sharedFlags) *cobra.Command {
 			// for write operations, so no second check is needed here.
 			r, err := applier.Apply(path, cfg, applier.Options{
 				Write:             f.write,
-				Includes:          shared.include,
+				Includes:          cfg.Includes,
 				AllowDirty:        f.allowDirty,
 				Force:             f.force,
 				NoGitignore:       shared.noGitignore,
@@ -261,7 +261,7 @@ func newLicenseCmd(shared *sharedFlags) *cobra.Command {
 			// for write operations, so no second check is needed here.
 			results, err := applier.License(path, cfg, applier.Options{
 				Write:             f.write,
-				Includes:          shared.include,
+				Includes:          cfg.Includes,
 				AllowDirty:        f.allowDirty,
 				Force:             f.force,
 				NoGitignore:       shared.noGitignore,
@@ -456,6 +456,7 @@ func newInitCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return usageError(err)
 			}
+			cfg.Includes = shared.include
 			target, err := config.WriteFile(path, cfg, f.force)
 			if err != nil {
 				return writeOrInternalError(err)
@@ -495,7 +496,7 @@ func buildAuditPipeline(cfg model.Config, shared *sharedFlags) report.Pipeline {
 	return report.Pipeline{
 		Enumerate: func(root string, excludes []string) ([]report.SourceFile, error) {
 			entries, err := enumerate.WithContent(root, enumerate.Options{
-				Includes:    shared.include,
+				Includes:    cfg.Includes,
 				Excludes:    excludes,
 				NoGitignore: shared.noGitignore,
 			}, classify)

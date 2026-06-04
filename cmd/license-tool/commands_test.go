@@ -295,6 +295,30 @@ func TestAuditCommand(t *testing.T) {
 		assert.Contains(t, out, "# license-tool audit report")
 	})
 
+	t.Run("config include scopes source enumeration", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML+"include: [\"included.go\"]\n")
+		writeFile(t, dir, "included.go", "package included\n")
+		writeFile(t, dir, "excluded.go", "package excluded\n")
+
+		out, err := runRoot(t, "audit", dir, "--deps=false")
+		require.NoError(t, err)
+		assert.Contains(t, out, "included.go")
+		assert.NotContains(t, out, "excluded.go")
+	})
+
+	t.Run("flag include overrides config include", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML+"include: [\"repo.go\"]\n")
+		writeFile(t, dir, "repo.go", "package repo\n")
+		writeFile(t, dir, "flag.go", "package flag\n")
+
+		out, err := runRoot(t, "audit", dir, "--include", "flag.go", "--deps=false")
+		require.NoError(t, err)
+		assert.Contains(t, out, "flag.go")
+		assert.NotContains(t, out, "repo.go")
+	})
+
 	t.Run("default path resolves to dot", func(t *testing.T) {
 		// No path arg: argPath returns ".". Run from an isolated empty dir so the
 		// audit sees only its own (absent) config and produces a clean report.
@@ -734,6 +758,25 @@ func TestApplyCommand(t *testing.T) {
 		assert.NotContains(t, string(ignored), "SPDX-License-Identifier")
 	})
 
+	t.Run("write honors config include scope", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configNoManagedYAML+"include: [\"included.go\"]\n")
+		writeFile(t, dir, "included.go", "package included\n")
+		writeFile(t, dir, "ignored.go", "package ignored\n")
+		initGitRepo(t, dir)
+
+		_, err := runRoot(t, "apply", dir, "--write")
+		require.NoError(t, err)
+
+		included, rerr := os.ReadFile(filepath.Join(dir, "included.go"))
+		require.NoError(t, rerr)
+		assert.Contains(t, string(included), "SPDX-License-Identifier: AGPL-3.0-or-later")
+
+		ignored, rerr := os.ReadFile(filepath.Join(dir, "ignored.go"))
+		require.NoError(t, rerr)
+		assert.NotContains(t, string(ignored), "SPDX-License-Identifier")
+	})
+
 	t.Run("allow-dirty commit leaves unrelated changes uncommitted", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, ".license-tool.yaml", configNoManagedYAML)
@@ -876,9 +919,9 @@ func TestInitCommand(t *testing.T) {
 
 	t.Run("flags scaffold config file", func(t *testing.T) {
 		// Non-TTY stdin (forced by isolateEnv) skips the wizard, so init scaffolds a
-		// .license-tool.yaml purely from the --license/--holder flags.
+		// .license-tool.yaml purely from flags.
 		dir := t.TempDir()
-		out, err := runRoot(t, "init", dir, "--license", "MIT", "--holder", "Acme")
+		out, err := runRoot(t, "init", dir, "--license", "MIT", "--holder", "Acme", "--include", "src/**", "--exclude", "vendor/**")
 		require.NoError(t, err)
 		target := filepath.Join(dir, ".license-tool.yaml")
 		assert.Contains(t, out, "wrote "+target)
@@ -887,6 +930,8 @@ func TestInitCommand(t *testing.T) {
 		require.NoError(t, lerr)
 		assert.Equal(t, "MIT", cfg.License)
 		assert.Equal(t, "Acme", cfg.Holder)
+		assert.Equal(t, []string{"src/**"}, cfg.Includes)
+		assert.Equal(t, []string{"vendor/**"}, cfg.Excludes)
 	})
 
 	t.Run("missing license errors", func(t *testing.T) {
