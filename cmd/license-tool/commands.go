@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -518,17 +520,84 @@ func buildAuditPipeline(cfg model.Config, shared *sharedFlags) report.Pipeline {
 		},
 		Detect: detect.Detect,
 		ResolveDeps: func(root string, allowToolShellOut bool) ([]model.DependencyLicense, error) {
-			var out []model.DependencyLicense
-			for _, r := range resolve.Detected(root) {
-				deps, rerr := r.Resolve(root, model.ResolveOptions{AllowToolShellOut: allowToolShellOut})
-				if rerr != nil {
-					return nil, rerr
-				}
-				out = append(out, deps...)
-			}
-			return out, nil
+			return resolveDependencyManifests(root, cfg.Excludes, shared.noGitignore, allowToolShellOut)
 		},
 	}
+}
+
+var dependencyManifestFileType = model.FileType{Name: "Dependency manifest"}
+
+var dependencyManifestNames = map[string]struct{}{
+	"build.gradle":     {},
+	"build.gradle.kts": {},
+	"package.json":     {},
+	"pom.xml":          {},
+}
+
+var dependencyDiscoveryPrunes = []string{
+	".gradle/",
+	"**/.gradle/",
+	"build/",
+	"**/build/",
+	"dist/",
+	"**/dist/",
+	"node_modules/",
+	"**/node_modules/",
+	"vendor/",
+	"**/vendor/",
+}
+
+func resolveDependencyManifests(root string, excludes []string, noGitignore bool, allowToolShellOut bool) ([]model.DependencyLicense, error) {
+	prunes := append([]string{}, dependencyDiscoveryPrunes...)
+	prunes = append(prunes, excludes...)
+	entries, err := enumerate.Enumerate(root, enumerate.Options{
+		Excludes:    prunes,
+		NoGitignore: noGitignore,
+	}, dependencyManifestClassifier)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []model.DependencyLicense
+	for _, dir := range dependencyManifestDirs(root, entries) {
+		for _, r := range resolve.Detected(dir) {
+			deps, rerr := r.Resolve(dir, model.ResolveOptions{AllowToolShellOut: allowToolShellOut})
+			if rerr != nil {
+				return nil, rerr
+			}
+			out = append(out, deps...)
+		}
+	}
+	return out, nil
+}
+
+func dependencyManifestClassifier(path string) (model.FileType, bool) {
+	if _, ok := dependencyManifestNames[filepath.Base(path)]; !ok {
+		return model.FileType{}, false
+	}
+	return dependencyManifestFileType, true
+}
+
+func dependencyManifestDirs(root string, entries []enumerate.Entry) []string {
+	seen := map[string]struct{}{}
+	for _, entry := range entries {
+		if entry.Skip {
+			continue
+		}
+		relDir := filepath.Dir(entry.Path)
+		if relDir == "." {
+			seen[root] = struct{}{}
+			continue
+		}
+		seen[filepath.Join(root, filepath.FromSlash(relDir))] = struct{}{}
+	}
+
+	dirs := make([]string, 0, len(seen))
+	for dir := range seen {
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+	return dirs
 }
 
 // sharedToFlags adapts the CLI's sharedFlags into the config package's Flags.

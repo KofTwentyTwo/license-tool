@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/KofTwentyTwo/license-tool/internal/config"
+	"github.com/KofTwentyTwo/license-tool/internal/enumerate"
 	"github.com/KofTwentyTwo/license-tool/internal/model"
 	"github.com/KofTwentyTwo/license-tool/internal/report"
 	"github.com/KofTwentyTwo/license-tool/internal/spdx"
@@ -356,6 +357,53 @@ func TestAuditCommand(t *testing.T) {
 		assert.Contains(t, stderr, `unknown dependency resolver tier "typo"`)
 	})
 
+	t.Run("deps resolution discovers nested manifests", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML)
+		writeFile(t, dir, filepath.Join("services", "api", "package.json"), `{"name":"api","dependencies":{"left-pad":"1.3.0"}}`)
+		writeFile(t, dir, filepath.Join("services", "api", "node_modules", "left-pad", "package.json"), `{"name":"left-pad","version":"1.3.0","license":"MIT"}`)
+
+		out, err := runRoot(t, "audit", dir, "--format", "json")
+		require.NoError(t, err)
+
+		var got struct {
+			Dependencies []struct {
+				Ecosystem  string `json:"ecosystem"`
+				Name       string `json:"name"`
+				Version    string `json:"version"`
+				SPDXID     string `json:"spdxId"`
+				Resolution string `json:"resolution"`
+			} `json:"dependencies"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(out), &got))
+		require.Len(t, got.Dependencies, 1)
+		assert.Equal(t, "npm", got.Dependencies[0].Ecosystem)
+		assert.Equal(t, "left-pad", got.Dependencies[0].Name)
+		assert.Equal(t, "1.3.0", got.Dependencies[0].Version)
+		assert.Equal(t, "MIT", got.Dependencies[0].SPDXID)
+		assert.Equal(t, "resolved", got.Dependencies[0].Resolution)
+	})
+
+	t.Run("gradle tool tier reports unsupported resolver", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML)
+		writeFile(t, dir, "build.gradle", `dependencies { implementation 'com.google.guava:guava:31.1-jre' }`)
+
+		out, err := runRoot(t, "audit", dir, "--format", "json", "--resolve-deps", "tool")
+		require.NoError(t, err)
+
+		var got struct {
+			Dependencies []struct {
+				Name   string `json:"name"`
+				Reason string `json:"reason"`
+			} `json:"dependencies"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(out), &got))
+		require.Len(t, got.Dependencies, 1)
+		assert.Equal(t, "com.google.guava:guava", got.Dependencies[0].Name)
+		assert.Contains(t, got.Dependencies[0].Reason, "Gradle tool-tier dependency-license resolution is not supported")
+	})
+
 	t.Run("resolve dependency error aborts audit", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, ".license-tool.yaml", configYAML)
@@ -518,6 +566,52 @@ func TestCheckFailingExits(t *testing.T) {
 	assert.Equal(t, 1, exitErr.ExitCode(), "check failure exits with code 1")
 	assert.Contains(t, string(out), "license-tool audit report")
 	assert.Contains(t, string(out), "result: FAIL")
+}
+
+func TestDependencyManifestClassifier(t *testing.T) {
+	ft, ok := dependencyManifestClassifier(filepath.Join("services", "api", "package.json"))
+	require.True(t, ok)
+	assert.Equal(t, dependencyManifestFileType, ft)
+
+	ft, ok = dependencyManifestClassifier("main.go")
+	assert.False(t, ok)
+	assert.Equal(t, model.FileType{}, ft)
+}
+
+func TestDependencyManifestDirs(t *testing.T) {
+	root := filepath.Join(string(os.PathSeparator), "repo")
+	entries := []enumerate.Entry{
+		{Path: "package.json"},
+		{Path: "services/api/package.json"},
+		{Path: "services/api/build.gradle"},
+		{Path: "ignored/package.json", Skip: true},
+	}
+
+	assert.Equal(t, []string{
+		root,
+		filepath.Join(root, "services", "api"),
+	}, dependencyManifestDirs(root, entries))
+}
+
+func TestResolveDependencyManifestsHonorsIgnoreAndPrunesHeavyDirs(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, ".gitignore", "ignored/\n")
+	writeFile(t, dir, filepath.Join("services", "api", "package.json"), `{"name":"api","dependencies":{"left-pad":"1.3.0"}}`)
+	writeFile(t, dir, filepath.Join("services", "api", "node_modules", "left-pad", "package.json"), `{"name":"left-pad","version":"1.3.0","license":"MIT"}`)
+	writeFile(t, dir, filepath.Join("ignored", "package.json"), `{"name":"ignored","dependencies":{"ignored-lib":"1.0.0"}}`)
+	writeFile(t, dir, filepath.Join("node_modules", "scanned-if-not-pruned", "package.json"), `{"name":"scanned-if-not-pruned","dependencies":{"bad":"1.0.0"}}`)
+
+	deps, err := resolveDependencyManifests(dir, nil, false, false)
+	require.NoError(t, err)
+	require.Len(t, deps, 1)
+	assert.Equal(t, "left-pad", deps[0].Name)
+	assert.Equal(t, "MIT", deps[0].SPDXID)
+}
+
+func TestResolveDependencyManifestsMissingRoot(t *testing.T) {
+	deps, err := resolveDependencyManifests(filepath.Join(t.TempDir(), "missing"), nil, false, false)
+	require.Error(t, err)
+	assert.Nil(t, deps)
 }
 
 func TestApplyCommand(t *testing.T) {

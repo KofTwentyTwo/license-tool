@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a reproducible license-tool failure or incorrect result.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include vulnerability details in a public issue. Use SECURITY.md for private reporting.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Minimal commands, config, and fixture files needed to reproduce.
+      placeholder: |
+        license-tool audit ./repo --format json
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output from license-tool version.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, shell, package manager, and relevant ecosystem tooling.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output
+      description: Relevant command output, with secrets removed.
+      render: text
+    validations:
+      required: false
