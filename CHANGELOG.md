@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.0] - 2026-06-04
 
+### Install
+```bash
+brew install --cask KofTwentyTwo/tap/license-tool
+```
+
 ### Added
 - Added first-class header support for Perl, PowerShell, R, Makefile, TOML, and Batch files.
 - Added conservative shebang-based type detection for extensionless scripts.
