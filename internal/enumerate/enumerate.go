@@ -50,6 +50,8 @@ type Entry struct {
 	SkipReason string
 }
 
+type ContentClassifier func(path string, head []byte) (model.FileType, bool)
+
 // skip reasons surfaced to the report. WHY centralized: detect.go and report.go key
 // off these exact tokens, so they are defined once to keep callers in sync.
 const (
@@ -78,6 +80,18 @@ var (
 // root is inside a working tree. Only outside git do we approximate those semantics
 // with a manual walk, which is necessarily a smaller subset of git's behavior.
 func Enumerate(root string, opts Options, classify func(path string) (model.FileType, bool)) ([]Entry, error) {
+	return enumerate(root, opts, func(path string, _ []byte) (model.FileType, bool) {
+		return classify(path)
+	}, false)
+}
+
+// EnumerateContent is the content-aware variant of Enumerate. It reads the leading
+// bytes once, passes them to classify, and reuses them for the binary check.
+func EnumerateContent(root string, opts Options, classify ContentClassifier) ([]Entry, error) {
+	return enumerate(root, opts, classify, true)
+}
+
+func enumerate(root string, opts Options, classify ContentClassifier, contentAware bool) ([]Entry, error) {
 	absRoot, err := filepathAbs(root)
 	if err != nil {
 		return nil, err
@@ -115,11 +129,63 @@ func Enumerate(root string, opts Options, classify func(path string) (model.File
 		}
 
 		abs := filepath.Join(absRoot, filepath.FromSlash(rel))
-		entry := classifyEntry(rel, abs, classify)
+		var entry Entry
+		if contentAware {
+			entry = classifyEntryContent(rel, abs, classify)
+		} else {
+			entry = classifyEntry(rel, abs, func(path string) (model.FileType, bool) {
+				ft, ok := classify(path, nil)
+				return ft, ok
+			})
+		}
 		entries = append(entries, entry)
 	}
 
 	return entries, nil
+}
+
+func classifyEntryContent(rel, abs string, classify ContentClassifier) Entry {
+	entry := Entry{Path: rel, AbsPath: abs}
+
+	info, err := os.Lstat(abs)
+	if err != nil {
+		entry.Skip = true
+		entry.SkipReason = reasonUnknownType
+		return entry
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		entry.Skip = true
+		entry.SkipReason = reasonSymlink
+		return entry
+	}
+	if !info.Mode().IsRegular() {
+		entry.Skip = true
+		entry.SkipReason = reasonUnknownType
+		return entry
+	}
+
+	head, rerr := readHead(abs)
+	ft, ok := classify(rel, head)
+	if !ok {
+		entry.Skip = true
+		entry.SkipReason = reasonUnknownType
+		return entry
+	}
+	entry.FileType = ft
+
+	if ft.Skip {
+		entry.Skip = true
+		entry.SkipReason = reasonUncommentable
+		return entry
+	}
+
+	if rerr == nil && IsBinary(head) {
+		entry.Skip = true
+		entry.SkipReason = reasonBinary
+		return entry
+	}
+
+	return entry
 }
 
 // classifyEntry resolves one path into an Entry, applying the skip ladder in the

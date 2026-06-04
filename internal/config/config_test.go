@@ -387,6 +387,31 @@ func TestLookupFunc(t *testing.T) {
 	})
 }
 
+func TestContentLookupFunc(t *testing.T) {
+	t.Run("no overrides returns builtin content lookup", func(t *testing.T) {
+		look := ContentLookupFunc(model.Config{})
+		ft, ok := look("script", []byte("#!/usr/bin/env python3\nprint('ok')\n"))
+		if !ok || ft.Name != "Python" {
+			t.Errorf("builtin content lookup failed for python shebang: ok=%v ft=%+v", ok, ft)
+		}
+	})
+
+	t.Run("overrides layered onto content lookup", func(t *testing.T) {
+		cfg := model.Config{
+			FileTypeOverrides: map[string]model.FileType{
+				".myext": {Name: "custom", Extensions: []string{".myext"}, CommentStyle: model.CommentStyle{LinePrefix: "// "}},
+			},
+		}
+		look := ContentLookupFunc(cfg)
+		if ft, ok := look("file.myext", []byte("#!/usr/bin/env python3\nprint('ok')\n")); !ok || ft.Name != "custom" {
+			t.Errorf("override content lookup failed: ok=%v ft=%+v", ok, ft)
+		}
+		if ft, ok := look("script", []byte("#!/usr/bin/env python3\nprint('ok')\n")); !ok || ft.Name != "Python" {
+			t.Errorf("shebang lookup lost after merge: ok=%v ft=%+v", ok, ft)
+		}
+	})
+}
+
 func TestParseFailConditions(t *testing.T) {
 	t.Run("all known tokens", func(t *testing.T) {
 		got, err := parseFailConditions([]string{"missing-header", "unknown-license", "policy-violation", "unresolved-dependency"})

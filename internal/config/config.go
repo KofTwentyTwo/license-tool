@@ -483,6 +483,15 @@ func LookupFunc(cfg model.Config) func(path string) (model.FileType, bool) {
 	return filetype.Merge(cfg.FileTypeOverrides)
 }
 
+// ContentLookupFunc returns the content-aware file-type lookup for cfg, preserving
+// the same override layering as LookupFunc before falling back to shebang content.
+func ContentLookupFunc(cfg model.Config) func(path string, head []byte) (model.FileType, bool) {
+	if len(cfg.FileTypeOverrides) == 0 {
+		return filetype.LookupContent
+	}
+	return filetype.MergeContent(cfg.FileTypeOverrides)
+}
+
 // ParseYearSpec parses a raw --year/config token into a model.YearSpec.
 // Accepts "current", "git", "YYYY", and "YYYY-YYYY".
 func ParseYearSpec(raw string) (model.YearSpec, error) {

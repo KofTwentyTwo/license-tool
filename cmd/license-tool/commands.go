@@ -351,10 +351,10 @@ func newVersionCmd(info buildInfo) *cobra.Command {
 // directly; ResolveDeps iterates the ecosystem resolvers detected at the root and
 // concatenates their findings (unresolved entries included, never guessed).
 func buildAuditPipeline(cfg model.Config, shared *sharedFlags) report.Pipeline {
-	classify := config.LookupFunc(cfg)
+	classify := config.ContentLookupFunc(cfg)
 	return report.Pipeline{
 		Enumerate: func(root string, excludes []string) ([]report.SourceFile, error) {
-			entries, err := enumerate.Enumerate(root, enumerate.Options{
+			entries, err := enumerate.EnumerateContent(root, enumerate.Options{
 				Includes:    shared.include,
 				Excludes:    excludes,
 				NoGitignore: shared.noGitignore,

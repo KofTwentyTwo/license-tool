@@ -675,6 +675,7 @@ func TestApplyDryRun(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
 	writeFile(t, root, "main.go", "package main\n")
+	writeFile(t, root, "tool", "#!/usr/bin/env python3\nprint('ok')\n")
 	writeFile(t, root, "data.json", "{}\n") // uncommentable: skipped
 	gitAddCommit(t, root)
 
@@ -688,6 +689,11 @@ func TestApplyDryRun(t *testing.T) {
 	assert.Equal(t, "insert", main.Action)
 	assert.NotEmpty(t, main.Diff)
 	assert.Empty(t, main.Err)
+
+	tool := findResult(t, rep.Files, "tool")
+	assert.Equal(t, "Python", tool.FileType)
+	assert.Equal(t, "insert", tool.Action)
+	assert.NotEmpty(t, tool.Diff)
 
 	json := findResult(t, rep.Files, "data.json")
 	assert.True(t, json.Skipped)
