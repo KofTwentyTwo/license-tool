@@ -56,4 +56,4 @@
 - [x] `go build ./...`
 - [x] `goreleaser check`
 - [x] `gitleaks detect --source . --no-banner --redact --exit-code 1`
-- [ ] Merge passing feature branch to local `develop`.
+- [x] Merge passing feature branch to local `develop`.
