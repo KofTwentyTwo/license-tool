@@ -21,13 +21,14 @@ import (
 
 	"github.com/google/licensecheck"
 
+	managedheader "github.com/KofTwentyTwo/license-tool/internal/header"
 	"github.com/KofTwentyTwo/license-tool/internal/model"
 	"github.com/KofTwentyTwo/license-tool/internal/spdx"
 )
 
 // Sentinel is the marker license-tool writes into headers it manages, giving the
 // highest-confidence signal that a leading comment is safe to replace.
-const Sentinel = "license-tool:managed"
+const Sentinel = managedheader.Sentinel
 
 // preserveBoundaryFn is the seam Detect calls to compute the preserve-first
 // boundary. It defaults to the real PreserveBoundary (which is incapable of
@@ -169,53 +170,7 @@ func Detect(content []byte, ft model.FileType) (model.DetectedHeader, error) {
 // then a coding pragma. Rules marked Before (package declarations) are never consumed
 // here: the header precedes them.
 func PreserveBoundary(content []byte, ft model.FileType) (int, error) {
-	pos := 0
-
-	// A UTF-8 BOM, when allowed, is always the very first bytes (U+FEFF). Written as an
-	// escape so the BOM byte sequence does not appear literally in this source file.
-	const utf8BOM = "\uFEFF"
-	if hasRule(ft, model.PreserveBOM, false) && strings.HasPrefix(string(content), utf8BOM) {
-		pos += len(utf8BOM)
-	}
-
-	// A leading "#!" is a kernel-level shebang valid for ANY executable script
-	// regardless of language, so it is preserved universally rather than gated on the
-	// file type listing PreserveShebang. This stays safe because the line is only
-	// consumed when it actually starts with "#!" (which only a real shebang does) and
-	// only at the very top of the file (pos 0); it can never over-consume an ordinary
-	// hash comment further down. All OTHER per-type rules remain gated as before.
-	allowShebang := true
-	allowXML := hasRule(ft, model.PreserveXMLDecl, false)
-	allowPHP := hasRule(ft, model.PreservePHPOpen, false)
-	allowPragma := hasRule(ft, model.PreserveCodingPragma, false)
-
-	// Consume contiguous preserve-AFTER lines in file order. We loop because several may
-	// stack (shebang then coding pragma). We stop at the first line that is not a
-	// consumable prefix; that is the header insertion point.
-	for pos < len(content) {
-		lineEnd := lineEndOffset(content, pos)
-		lineText := string(content[pos:lineEnd])
-		trimmed := strings.TrimRight(lineText, "\r\n")
-		consumed := false
-
-		switch {
-		case allowShebang && strings.HasPrefix(trimmed, "#!"):
-			consumed = true
-		case allowXML && strings.HasPrefix(strings.TrimSpace(trimmed), "<?xml"):
-			consumed = true
-		case allowPHP && strings.HasPrefix(strings.TrimSpace(trimmed), "<?php"):
-			consumed = true
-		case allowPragma && isCodingPragma(trimmed):
-			consumed = true
-		}
-
-		if !consumed {
-			break
-		}
-		pos = lineEnd
-	}
-
-	return pos, nil
+	return managedheader.PreserveBoundary(content, ft), nil
 }
 
 // FingerprintLicense attempts to map a block of header text to an SPDX id using the
@@ -487,16 +442,6 @@ func extractYear(commentText string) string {
 // --- small parsing helpers (WHY package-local: avoid pulling regexp for a few
 // fixed-shape extractions; keeps detection allocation-light and easy to audit). ---
 
-// hasRule reports whether ft lists a preserve rule of the given kind and direction.
-func hasRule(ft model.FileType, kind model.PreserveKind, before bool) bool {
-	for _, r := range ft.PreserveFirst {
-		if r.Kind == kind && r.Before == before {
-			return true
-		}
-	}
-	return false
-}
-
 // lineEndOffset returns the offset just past the newline terminating the line at pos
 // (or len(content) for the final unterminated line).
 func lineEndOffset(content []byte, pos int) int {
@@ -506,17 +451,6 @@ func lineEndOffset(content []byte, pos int) int {
 		}
 	}
 	return len(content)
-}
-
-// isCodingPragma reports whether trimmed is an encoding pragma like
-// "# -*- coding: utf-8 -*-" or "# vim: ..." style coding declaration.
-func isCodingPragma(trimmed string) bool {
-	t := strings.TrimSpace(trimmed)
-	if !strings.HasPrefix(t, "#") {
-		return false
-	}
-	lower := strings.ToLower(t)
-	return strings.Contains(lower, "coding:") || strings.Contains(lower, "coding=")
 }
 
 // stripBlockInner removes leading per-line decoration ("*" continuation markers and

@@ -31,23 +31,13 @@ import (
 	"strings"
 
 	"github.com/KofTwentyTwo/license-tool/internal/gitutil"
+	managedheader "github.com/KofTwentyTwo/license-tool/internal/header"
 	"github.com/KofTwentyTwo/license-tool/internal/model"
 )
 
 // errNotImplemented is retained for the one strategy (git year) that depends on a
 // frozen-but-stubbed sibling package; every other path is fully implemented.
 var errNotImplemented = errors.New("render: not implemented")
-
-// sentinel is the marker embedded in every header this tool writes. It mirrors
-// detect.Sentinel by value (we cannot import internal/detect without risking an
-// import cycle through the applier, and the constant is part of the cross-package
-// contract). A future detection pass keys on this string for the highest-confidence
-// "this comment is safe to replace" signal.
-//
-// WHY duplicated rather than imported: the value is a fixed wire contract shared by
-// the writer (here) and the reader (internal/detect); both reference the same
-// literal so neither package depends on the other's build.
-const sentinel = "license-tool:managed"
 
 // HeaderInput is everything needed to render one file's header.
 type HeaderInput struct {
@@ -101,7 +91,7 @@ func plaintextHeader(in HeaderInput) string {
 
 	// The sentinel rides as the first line so detection finds it before parsing any
 	// tags. It is comment-wrapped along with everything else.
-	lines = append(lines, "SPDX-License-Tool: "+sentinel)
+	lines = append(lines, "SPDX-License-Tool: "+managedheader.Sentinel)
 
 	emitReuse := in.Style == model.StyleReuse || in.Style == model.StyleReusePlusNotice
 	emitNotice := in.Style == model.StyleNotice || in.Style == model.StyleReusePlusNotice
@@ -267,7 +257,7 @@ func Replace(content []byte, headerLF string, start, end int) (newContent []byte
 // separator; we re-normalize that separator to eol so an inserted header on a CRLF
 // file does not introduce a lone LF.
 func insertAt(content []byte, ft model.FileType, header string, eol string) ([]byte, string) {
-	at := preserveBoundary(content, ft)
+	at := managedheader.PreserveBoundary(content, ft)
 	prefix := content[:at]
 	rest := content[at:]
 
@@ -307,118 +297,7 @@ func replaceSpan(content []byte, header string, start, end int) ([]byte, string)
 	return b, "replace"
 }
 
-// preserveBoundary returns the byte offset after all leading preserve-first
-// prefixes the file type marks AFTER (shebang, xml-decl, php-open, BOM, coding
-// pragma). A construct marked Before (a package declaration) does NOT advance the
-// boundary: the header is placed before it, so the boundary stays at the start of
-// content (after any AFTER prefixes), which is before the package line.
-//
-// WHY recompute here rather than call detect.PreserveBoundary: detect is a sibling
-// package this owner must not depend on at runtime (and it is itself a stub in this
-// build). The rules are pure data on ft.PreserveFirst, so the computation is local
-// and self-contained.
-func preserveBoundary(content []byte, ft model.FileType) int {
-	pos := 0
-
-	// A BOM, when present and the type preserves it, is always first.
-	if hasRule(ft, model.PreserveBOM, false) && hasBOM(content[pos:]) {
-		pos += len(bom)
-	}
-
-	// A leading "#!" is a kernel-level shebang valid for ANY executable script
-	// regardless of language, so it is preserved universally rather than gated on the
-	// file type listing PreserveShebang. We consume it here (right after any BOM)
-	// independent of the rule list. This stays safe because the line is only consumed
-	// when it actually starts with "#!" (which only a real shebang does) and only at
-	// the very top of the file; it can never over-consume an ordinary hash comment
-	// below. All OTHER per-type rules below remain gated by ft.PreserveFirst as before.
-	pos = advanceLineIf(content, pos, func(line string) bool {
-		return strings.HasPrefix(line, "#!")
-	})
-
-	for _, rule := range ft.PreserveFirst {
-		if rule.Before {
-			// Header goes before this construct; do not advance past it.
-			continue
-		}
-		switch rule.Kind {
-		case model.PreserveBOM:
-			// Handled above to guarantee it leads.
-		case model.PreserveShebang:
-			pos = advanceLineIf(content, pos, func(line string) bool {
-				return strings.HasPrefix(line, "#!")
-			})
-		case model.PreserveXMLDecl:
-			pos = advanceLineIf(content, pos, func(line string) bool {
-				return strings.HasPrefix(strings.TrimSpace(line), "<?xml")
-			})
-		case model.PreservePHPOpen:
-			pos = advanceLineIf(content, pos, func(line string) bool {
-				return strings.HasPrefix(strings.TrimSpace(line), "<?php")
-			})
-		case model.PreserveCodingPragma:
-			pos = advanceLineIf(content, pos, func(line string) bool {
-				t := strings.TrimSpace(line)
-				return strings.HasPrefix(t, "#") && strings.Contains(t, "coding:")
-			})
-		}
-	}
-	return pos
-}
-
-// hasRule reports whether ft lists a preserve rule of kind k with the given Before.
-func hasRule(ft model.FileType, k model.PreserveKind, before bool) bool {
-	for _, r := range ft.PreserveFirst {
-		if r.Kind == k && r.Before == before {
-			return true
-		}
-	}
-	return false
-}
-
-// advanceLineIf, if the line beginning at pos satisfies match, returns the offset
-// just past that line's terminator (or end of content). Otherwise returns pos
-// unchanged. It is newline-agnostic: it consumes a trailing CRLF or LF.
-func advanceLineIf(content []byte, pos int, match func(line string) bool) int {
-	if pos >= len(content) {
-		return pos
-	}
-	nl := indexByteFrom(content, pos, '\n')
-	var line string
-	var next int
-	if nl < 0 {
-		line = string(content[pos:])
-		next = len(content)
-	} else {
-		// Trim a trailing CR so CRLF lines match the same predicate as LF lines.
-		line = strings.TrimSuffix(string(content[pos:nl]), "\r")
-		next = nl + 1
-	}
-	if match(line) {
-		return next
-	}
-	return pos
-}
-
-// indexByteFrom returns the index of the first b at or after start, or -1.
-func indexByteFrom(content []byte, start int, b byte) int {
-	for i := start; i < len(content); i++ {
-		if content[i] == b {
-			return i
-		}
-	}
-	return -1
-}
-
 // EOL handling ----------------------------------------------------------------
-
-// bom is the UTF-8 byte-order mark.
-var bom = []byte{0xEF, 0xBB, 0xBF}
-
-// hasBOM reports whether content begins with a UTF-8 BOM.
-func hasBOM(content []byte) bool {
-	return len(content) >= 3 && content[0] == bom[0] && content[1] == bom[1] && content[2] == bom[2]
-}
 
 // detectEOL returns the dominant line ending of content: "\r\n" if the first line
 // break is a CRLF, else "\n". Empty or newline-free content defaults to LF.

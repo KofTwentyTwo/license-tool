@@ -698,20 +698,6 @@ func TestExtractYear(t *testing.T) {
 
 // --- small helpers -----------------------------------------------------------
 
-func TestHasRule(t *testing.T) {
-	ft := lineFT()
-	assert.True(t, hasRule(ft, model.PreservePackageDecl, true))
-	assert.False(t, hasRule(ft, model.PreservePackageDecl, false))
-	assert.False(t, hasRule(ft, model.PreserveShebang, false))
-}
-
-func TestIsCodingPragma(t *testing.T) {
-	assert.True(t, isCodingPragma("# -*- coding: utf-8 -*-"))
-	assert.True(t, isCodingPragma("# coding=latin-1"))
-	assert.False(t, isCodingPragma("# just a comment"))
-	assert.False(t, isCodingPragma("not a hash line"))
-}
-
 func TestStripBlockInner(t *testing.T) {
 	in := "\n * line one\r\n * line two\n"
 	out := stripBlockInner(in)
