@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -165,6 +166,7 @@ type applyFlags struct {
 	holder        string
 	year          string
 	style         string
+	format        string
 	write         bool
 	allowDirty    bool
 	force         bool
@@ -184,13 +186,19 @@ func newApplyCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			format, err := report.ParseFormat(f.format)
+			if err != nil {
+				return err
+			}
 			// config.Resolve already validates the merged license (which equals f.license
 			// whenever the flag is set) against the vendored SPDX list, so no second check
 			// is needed here.
 			r, err := applier.Apply(path, cfg, applier.Options{
 				Write:             f.write,
+				Includes:          shared.include,
 				AllowDirty:        f.allowDirty,
 				Force:             f.force,
+				NoGitignore:       shared.noGitignore,
 				Commit:            f.commit,
 				CommitMessage:     f.commitMessage,
 				ManageLicenseFile: cfg.ManageLicenseFile,
@@ -198,10 +206,11 @@ func newApplyCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return report.Render(cmd.OutOrStdout(), r, report.FormatText)
+			return report.Render(cmd.OutOrStdout(), r, format)
 		},
 	}
 	bindApplyFlags(cmd, f)
+	cmd.Flags().StringVar(&f.format, "format", "text", "output format: text|json|markdown")
 	return cmd
 }
 
@@ -220,17 +229,25 @@ func newLicenseCmd(shared *sharedFlags) *cobra.Command {
 			// config.Resolve already validates the merged license (which equals f.license
 			// whenever the flag is set) against the vendored SPDX list, so no second check
 			// is needed here.
-			results, err := applier.ManageLicenseFiles(path, cfg, applier.Options{
+			results, err := applier.License(path, cfg, applier.Options{
 				Write:             f.write,
+				Includes:          shared.include,
 				AllowDirty:        f.allowDirty,
 				Force:             f.force,
+				NoGitignore:       shared.noGitignore,
+				Commit:            f.commit,
+				CommitMessage:     f.commitMessage,
 				ManageLicenseFile: true,
 			})
 			if err != nil {
 				return err
 			}
+			out := cmd.OutOrStdout()
 			for _, fr := range results {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", fr.Path, fr.Action)
+				fmt.Fprintf(out, "%s: %s\n", fr.Path, fr.Action)
+				if fr.Diff != "" {
+					fmt.Fprintln(out, strings.TrimRight(fr.Diff, "\n"))
+				}
 			}
 			return nil
 		},

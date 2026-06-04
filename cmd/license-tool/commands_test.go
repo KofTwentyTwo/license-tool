@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -72,6 +73,7 @@ func writeFile(t *testing.T, dir, rel, content string) string {
 }
 
 const configYAML = "license: AGPL-3.0-or-later\nholder: Acme, LLC\nyear: \"2026\"\n"
+const configNoManagedYAML = configYAML + "manage_license_file: false\n"
 
 // fixtureDir creates a temp directory with a committed .license-tool.yaml and a
 // headerless Go source file.
@@ -89,6 +91,7 @@ func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	for _, args := range [][]string{
 		{"init"},
+		{"config", "commit.gpgsign", "false"},
 		{"add", "-A"},
 		{"commit", "-m", "initial"},
 	} {
@@ -98,6 +101,31 @@ func initGitRepo(t *testing.T, dir string) {
 			t.Fatalf("git %v failed: %v\n%s", args, err, b)
 		}
 	}
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v failed:\n%s", args, out)
+	return strings.TrimSpace(string(out))
+}
+
+func jsonFileEntry(t *testing.T, out, path string) map[string]any {
+	t.Helper()
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &raw))
+	files, ok := raw["files"].([]any)
+	require.True(t, ok)
+	for _, file := range files {
+		entry, ok := file.(map[string]any)
+		require.True(t, ok)
+		if entry["path"] == path {
+			return entry
+		}
+	}
+	t.Fatalf("no JSON file entry for %q in %v", path, files)
+	return nil
 }
 
 func TestNewRootCmd(t *testing.T) {
@@ -346,11 +374,29 @@ func TestApplyCommand(t *testing.T) {
 		out, err := runRoot(t, "apply", dir)
 		require.NoError(t, err)
 		assert.Contains(t, out, "license-tool audit report")
+		assert.Contains(t, out, "@@")
+		assert.Contains(t, out, "+  SPDX-License-Identifier: AGPL-3.0-or-later")
 
 		// Dry run leaves the source untouched.
 		content, rerr := os.ReadFile(filepath.Join(dir, "main.go"))
 		require.NoError(t, rerr)
 		assert.NotContains(t, string(content), "GNU Affero")
+	})
+
+	t.Run("dry-run json includes unified diff", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configNoManagedYAML)
+		writeFile(t, dir, "main.go", "package main\n")
+		initGitRepo(t, dir)
+
+		out, err := runRoot(t, "apply", dir, "--include", "main.go", "--format", "json")
+		require.NoError(t, err)
+
+		main := jsonFileEntry(t, out, "main.go")
+		diff, ok := main["diff"].(string)
+		require.True(t, ok)
+		assert.Contains(t, diff, "+++ Go")
+		assert.Contains(t, diff, "+  SPDX-License-Identifier: AGPL-3.0-or-later")
 	})
 
 	t.Run("write applies headers", func(t *testing.T) {
@@ -363,6 +409,19 @@ func TestApplyCommand(t *testing.T) {
 		content, rerr := os.ReadFile(filepath.Join(dir, "main.go"))
 		require.NoError(t, rerr)
 		assert.Contains(t, string(content), "GNU Affero")
+	})
+
+	t.Run("write json omits unified diff", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configNoManagedYAML)
+		writeFile(t, dir, "main.go", "package main\n")
+		initGitRepo(t, dir)
+
+		out, err := runRoot(t, "apply", dir, "--write", "--include", "main.go", "--format", "json")
+		require.NoError(t, err)
+
+		main := jsonFileEntry(t, out, "main.go")
+		assert.NotContains(t, main, "diff")
 	})
 
 	t.Run("config resolve error", func(t *testing.T) {
@@ -380,6 +439,13 @@ func TestApplyCommand(t *testing.T) {
 		assert.Contains(t, err.Error(), "not a recognized SPDX license identifier")
 	})
 
+	t.Run("bad format", func(t *testing.T) {
+		dir := fixtureDir(t)
+		_, err := runRoot(t, "apply", dir, "--format", "xml")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `unknown format "xml"`)
+	})
+
 	t.Run("apply error: write in non-git dir without force", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, ".license-tool.yaml", configYAML)
@@ -387,6 +453,49 @@ func TestApplyCommand(t *testing.T) {
 		_, err := runRoot(t, "apply", dir, "--write")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "non-git directory without --force")
+	})
+
+	t.Run("write honors include scope", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configNoManagedYAML)
+		writeFile(t, dir, "included.go", "package included\n")
+		writeFile(t, dir, "ignored.go", "package ignored\n")
+		initGitRepo(t, dir)
+
+		_, err := runRoot(t, "apply", dir, "--write", "--include", "included.go")
+		require.NoError(t, err)
+
+		included, rerr := os.ReadFile(filepath.Join(dir, "included.go"))
+		require.NoError(t, rerr)
+		assert.Contains(t, string(included), "SPDX-License-Identifier: AGPL-3.0-or-later")
+
+		ignored, rerr := os.ReadFile(filepath.Join(dir, "ignored.go"))
+		require.NoError(t, rerr)
+		assert.NotContains(t, string(ignored), "SPDX-License-Identifier")
+	})
+
+	t.Run("allow-dirty commit leaves unrelated changes uncommitted", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configNoManagedYAML)
+		writeFile(t, dir, "main.go", "package main\n")
+		writeFile(t, dir, "unrelated.go", "package unrelated\n")
+		initGitRepo(t, dir)
+		writeFile(t, dir, "unrelated.go", "package unrelated\n\nvar Dirty = true\n")
+
+		_, err := runRoot(t, "apply", dir,
+			"--write",
+			"--allow-dirty",
+			"--commit",
+			"--commit-message", "chore: scoped license update",
+			"--include", "main.go",
+		)
+		require.NoError(t, err)
+
+		assert.Equal(t, "chore: scoped license update", gitOutput(t, dir, "log", "-1", "--format=%s"))
+		changedInCommit := gitOutput(t, dir, "show", "--name-only", "--format=", "HEAD")
+		assert.Contains(t, changedInCommit, "main.go")
+		assert.NotContains(t, changedInCommit, "unrelated.go")
+		assert.Contains(t, gitOutput(t, dir, "status", "--porcelain"), "unrelated.go")
 	})
 }
 
@@ -399,6 +508,8 @@ func TestLicenseCommand(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, out, "LICENSE:")
 		assert.Contains(t, out, filepath.Join("LICENSES", "AGPL-3.0-or-later.txt"))
+		assert.Contains(t, out, "+++ LICENSE")
+		assert.Contains(t, out, "+GNU AFFERO GENERAL PUBLIC LICENSE")
 	})
 
 	t.Run("write creates LICENSE files", func(t *testing.T) {
@@ -412,6 +523,41 @@ func TestLicenseCommand(t *testing.T) {
 		require.NoError(t, statErr)
 		_, statErr = os.Stat(filepath.Join(dir, "LICENSES", "AGPL-3.0-or-later.txt"))
 		require.NoError(t, statErr)
+	})
+
+	t.Run("write in non-git dir without force is refused", func(t *testing.T) {
+		dir := fixtureDir(t)
+		_, err := runRoot(t, "license", dir, "--write")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "non-git directory without --force")
+		_, statErr := os.Stat(filepath.Join(dir, "LICENSE"))
+		assert.True(t, os.IsNotExist(statErr))
+	})
+
+	t.Run("write in dirty git tree without allow-dirty is refused", func(t *testing.T) {
+		dir := fixtureDir(t)
+		initGitRepo(t, dir)
+		writeFile(t, dir, "main.go", "package main\n\nvar Dirty = true\n")
+
+		_, err := runRoot(t, "license", dir, "--write")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "dirty git tree")
+		_, statErr := os.Stat(filepath.Join(dir, "LICENSE"))
+		assert.True(t, os.IsNotExist(statErr))
+	})
+
+	t.Run("commit flags create scoped license-file commit", func(t *testing.T) {
+		dir := fixtureDir(t)
+		initGitRepo(t, dir)
+
+		_, err := runRoot(t, "license", dir, "--write", "--commit", "--commit-message", "chore: add license files")
+		require.NoError(t, err)
+
+		assert.Equal(t, "chore: add license files", gitOutput(t, dir, "log", "-1", "--format=%s"))
+		changedInCommit := gitOutput(t, dir, "show", "--name-only", "--format=", "HEAD")
+		assert.Contains(t, changedInCommit, "LICENSE")
+		assert.Contains(t, changedInCommit, filepath.ToSlash(filepath.Join("LICENSES", "AGPL-3.0-or-later.txt")))
+		assert.Empty(t, gitOutput(t, dir, "status", "--porcelain"))
 	})
 
 	t.Run("config resolve error", func(t *testing.T) {

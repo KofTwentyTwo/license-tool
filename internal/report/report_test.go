@@ -642,6 +642,20 @@ func TestRenderText(t *testing.T) {
 	})
 }
 
+func TestRenderTextIncludesUnifiedDiffs(t *testing.T) {
+	r := emptyReport()
+	r.Files = []model.FileResult{
+		{Path: "a.go", FileType: "Go", Action: "insert", Diff: "--- a.go\n+++ a.go\n@@ -1 +1,2 @@\n package a\n+// SPDX-License-Identifier: MIT\n"},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, Render(&buf, r, FormatText))
+	out := buf.String()
+	assert.Contains(t, out, "pending diffs:")
+	assert.Contains(t, out, "+++ a.go")
+	assert.Contains(t, out, "+// SPDX-License-Identifier: MIT")
+}
+
 // fileLine covers the unresolved-dep "no reason" -> (none) and the empty-config
 // orNone paths exercised through a tailored report.
 func TestRenderTextOrNoneFallbacks(t *testing.T) {
@@ -756,6 +770,41 @@ func TestRenderJSON(t *testing.T) {
 		assert.Contains(t, out, `"files": []`)
 		assert.Contains(t, out, `"dependencies": []`)
 		assert.NotContains(t, out, "null")
+	})
+}
+
+func TestRenderJSONDiffField(t *testing.T) {
+	t.Run("includes non-empty diff", func(t *testing.T) {
+		r := emptyReport()
+		r.Files = []model.FileResult{
+			{Path: "a.go", FileType: "Go", Action: "insert", Diff: "--- a.go\n+++ a.go\n@@ -1 +1,2 @@\n package a\n+// SPDX-License-Identifier: MIT\n"},
+		}
+
+		var buf bytes.Buffer
+		require.NoError(t, Render(&buf, r, FormatJSON))
+
+		var got jsonReport
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &got))
+		require.Len(t, got.Files, 1)
+		assert.Contains(t, got.Files[0].Diff, "+++ a.go")
+		assert.Contains(t, got.Files[0].Diff, "+// SPDX-License-Identifier: MIT")
+	})
+
+	t.Run("omits empty diff", func(t *testing.T) {
+		r := emptyReport()
+		r.Files = []model.FileResult{{Path: "a.go", FileType: "Go", Action: "none"}}
+
+		var buf bytes.Buffer
+		require.NoError(t, Render(&buf, r, FormatJSON))
+
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &raw))
+		files, ok := raw["files"].([]any)
+		require.True(t, ok)
+		require.Len(t, files, 1)
+		fileEntry, ok := files[0].(map[string]any)
+		require.True(t, ok)
+		assert.NotContains(t, fileEntry, "diff")
 	})
 }
 

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	"github.com/KofTwentyTwo/license-tool/internal/model"
 	"github.com/KofTwentyTwo/license-tool/internal/policy"
@@ -460,6 +461,8 @@ func renderText(w io.Writer, r model.Report) error {
 	}
 	bw.printf("\n")
 
+	renderTextDiffs(bw, r.Files)
+
 	bw.printf("dependencies: %d\n", len(r.Dependencies))
 	for _, dep := range sortedDeps(r.Dependencies) {
 		bw.printf("  %s\n", depLine(dep))
@@ -475,6 +478,24 @@ func renderText(w io.Writer, r model.Report) error {
 	}
 
 	return bw.err
+}
+
+func renderTextDiffs(bw *errWriter, files []model.FileResult) {
+	diffFiles := make([]model.FileResult, 0)
+	for _, fr := range sortedFiles(files) {
+		if fr.Diff != "" {
+			diffFiles = append(diffFiles, fr)
+		}
+	}
+	if len(diffFiles) == 0 {
+		return
+	}
+
+	bw.printf("pending diffs:\n")
+	for _, fr := range diffFiles {
+		bw.printf("%s\n", strings.TrimRight(fr.Diff, "\n"))
+	}
+	bw.printf("\n")
 }
 
 func fileLine(fr model.FileResult) string {
@@ -611,6 +632,7 @@ type jsonFile struct {
 	Holder     string   `json:"holder,omitempty"`
 	Year       string   `json:"year,omitempty"`
 	Action     string   `json:"action,omitempty"`
+	Diff       string   `json:"diff,omitempty"`
 	Violations []string `json:"violations,omitempty"`
 	Error      string   `json:"error,omitempty"`
 }
@@ -649,6 +671,7 @@ func renderJSON(w io.Writer, r model.Report) error {
 			Holder:     fr.Detected.Holder,
 			Year:       fr.Detected.Year,
 			Action:     fr.Action,
+			Diff:       fr.Diff,
 			Violations: nonNilStrings(fr.Violations),
 			Error:      fr.Err,
 		})

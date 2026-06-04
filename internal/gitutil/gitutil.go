@@ -101,3 +101,22 @@ func Commit(path, message string) error {
 	}
 	return nil
 }
+
+// CommitPaths stages and commits only the named repo-relative paths. Pre-existing
+// staged or unstaged changes outside this pathset are left alone.
+func CommitPaths(path, message string, paths []string) error {
+	if len(paths) == 0 {
+		return fmt.Errorf("gitutil: no paths to commit")
+	}
+
+	addArgs := append([]string{"add", "--"}, paths...)
+	if _, err := run(path, addArgs...); err != nil {
+		return err
+	}
+
+	commitArgs := append([]string{"commit", "-m", message, "--only", "--"}, paths...)
+	if _, err := run(path, commitArgs...); err != nil {
+		return err
+	}
+	return nil
+}
