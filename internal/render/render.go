@@ -325,6 +325,17 @@ func preserveBoundary(content []byte, ft model.FileType) int {
 		pos += len(bom)
 	}
 
+	// A leading "#!" is a kernel-level shebang valid for ANY executable script
+	// regardless of language, so it is preserved universally rather than gated on the
+	// file type listing PreserveShebang. We consume it here (right after any BOM)
+	// independent of the rule list. This stays safe because the line is only consumed
+	// when it actually starts with "#!" (which only a real shebang does) and only at
+	// the very top of the file; it can never over-consume an ordinary hash comment
+	// below. All OTHER per-type rules below remain gated by ft.PreserveFirst as before.
+	pos = advanceLineIf(content, pos, func(line string) bool {
+		return strings.HasPrefix(line, "#!")
+	})
+
 	for _, rule := range ft.PreserveFirst {
 		if rule.Before {
 			// Header goes before this construct; do not advance past it.

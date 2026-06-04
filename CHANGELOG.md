@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-04
+
+### Fixed
+- Preserve a leading `#!` shebang universally (not per-type), so `apply` never inserts the header before the shebang. Fixes corruption of shebang-bearing scripts whose type lacked an explicit shebang rule (e.g. a PHP CLI script `#!/usr/bin/env php` + `<?php`), where the block-comment header was written at byte 0, breaking the file.
+
 ## [0.2.0] - 2026-06-03
 
 ### Added
