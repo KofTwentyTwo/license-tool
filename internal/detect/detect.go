@@ -178,7 +178,13 @@ func PreserveBoundary(content []byte, ft model.FileType) (int, error) {
 		pos += len(utf8BOM)
 	}
 
-	allowShebang := hasRule(ft, model.PreserveShebang, false)
+	// A leading "#!" is a kernel-level shebang valid for ANY executable script
+	// regardless of language, so it is preserved universally rather than gated on the
+	// file type listing PreserveShebang. This stays safe because the line is only
+	// consumed when it actually starts with "#!" (which only a real shebang does) and
+	// only at the very top of the file (pos 0); it can never over-consume an ordinary
+	// hash comment further down. All OTHER per-type rules remain gated as before.
+	allowShebang := true
 	allowXML := hasRule(ft, model.PreserveXMLDecl, false)
 	allowPHP := hasRule(ft, model.PreservePHPOpen, false)
 	allowPragma := hasRule(ft, model.PreserveCodingPragma, false)

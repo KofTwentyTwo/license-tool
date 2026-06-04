@@ -328,6 +328,89 @@ func TestSpliceInsertAfterPHPOpen(t *testing.T) {
 	assert.Less(t, idxOpen, idxHeader)
 }
 
+// TestSpliceShebangPreservedForBlockCommentTypes is the regression guard for the
+// universal-shebang fix. Before the fix, a leading "#!" was only preserved when the
+// file type explicitly listed PreserveShebang; a BLOCK-comment type either lacked the
+// rule (C/C++) or ordered it after php-open (PHP), so the header was spliced ABOVE the
+// shebang and the script stopped being executable. The fix preserves any leading "#!"
+// universally, so on every block-comment type the shebang must stay line 1 with the
+// header inserted strictly after it.
+func TestSpliceShebangPreservedForBlockCommentTypes(t *testing.T) {
+	cases := []struct {
+		name       string
+		sampleFile string
+		content    string
+		// wantPrefix is the exact byte prefix that must lead the output (the shebang,
+		// plus any prolog such as <?php, all before the header).
+		wantPrefix string
+	}{
+		{
+			// PHP CLI script: "#!" line 1, "<?php" line 2, header after both. PHP is a
+			// block-comment type whose rule list orders shebang before php-open.
+			name:       "php shebang then php-open",
+			sampleFile: "x.php",
+			content:    "#!/usr/bin/env php\n<?php\necho 'hi';\n",
+			wantPrefix: "#!/usr/bin/env php\n<?php\n",
+		},
+		{
+			// JavaScript is a block-comment type that DOES list PreserveShebang: a node
+			// CLI shebang must stay line 1 with the /* */ header after it.
+			name:       "javascript block-comment type with shebang",
+			sampleFile: "cli.js",
+			content:    "#!/usr/bin/env node\nconsole.log('hi');\n",
+			wantPrefix: "#!/usr/bin/env node\n",
+		},
+		{
+			// C/C++ is a block-comment type that does NOT list PreserveShebang at all.
+			// This is the case the universal rule exists for: preservation must NOT be
+			// gated on the type listing the rule. (binfmt_misc lets a "#!" launch any
+			// interpreter, so a shebang on a .c source is legal and must survive.)
+			name:       "c block-comment type without a shebang rule",
+			sampleFile: "x.c",
+			content:    "#!/usr/bin/tcc -run\nint main(void){return 0;}\n",
+			wantPrefix: "#!/usr/bin/tcc -run\n",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ft, header := makeHeaderLF(t, c.sampleFile)
+			out, action := Splice([]byte(c.content), ft, header, model.DetectedHeader{Present: false})
+			got := string(out)
+
+			assert.Equal(t, "insert", action)
+			assert.True(t, strings.HasPrefix(got, c.wantPrefix),
+				"the shebang (and any prolog) must remain the file's leading bytes; got %q", got)
+			idxShebang := strings.Index(got, "#!")
+			idxHeader := strings.Index(got, "SPDX-License-Identifier: MIT")
+			require.GreaterOrEqual(t, idxHeader, 0, "header must be present")
+			assert.Equal(t, 0, idxShebang, "the shebang must start at byte 0 (line 1)")
+			assert.Less(t, idxShebang, idxHeader, "the header must be inserted after the shebang")
+			assert.Contains(t, got, ft.CommentStyle.Open,
+				"the inserted header uses the type's block-comment open delimiter")
+		})
+	}
+}
+
+// TestSpliceNonShebangBlockCommentUnaffected proves the universal rule is inert when
+// there is no shebang: a block-comment file whose first line is ordinary code must get
+// the header at the very top (byte 0), exactly as before the fix. This pins the "only
+// consumed when the line actually starts with #!" safety claim.
+func TestSpliceNonShebangBlockCommentUnaffected(t *testing.T) {
+	ft, header := makeHeaderLF(t, "x.c")
+	content := []byte("int main(void){return 0;}\n")
+
+	out, action := Splice(content, ft, header, model.DetectedHeader{Present: false})
+	got := string(out)
+
+	assert.Equal(t, "insert", action)
+	assert.True(t, strings.HasPrefix(got, ft.CommentStyle.Open),
+		"with no shebang the header leads at byte 0; got %q", got)
+	idxHeader := strings.Index(got, "SPDX-License-Identifier: MIT")
+	idxBody := strings.Index(got, "int main")
+	assert.Less(t, idxHeader, idxBody, "header precedes the first real line when there is no shebang")
+}
+
 func TestSpliceInsertAfterCodingPragma(t *testing.T) {
 	ft, header := makeHeaderLF(t, "x.py")
 	content := []byte("#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\nprint('hi')\n")

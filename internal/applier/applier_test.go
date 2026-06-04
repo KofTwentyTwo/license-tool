@@ -33,6 +33,23 @@ func goFileType() model.FileType {
 	}
 }
 
+// phpFileType returns a block-comment PHP file type whose preserve rules mirror the
+// builtin table: BOM, then a (universal) shebang, then the <?php open tag, all before
+// the header. It is defined locally for the same reason goFileType is -- to avoid
+// depending on the filetype package's table from the applier tests.
+func phpFileType() model.FileType {
+	return model.FileType{
+		Name:         "PHP",
+		Extensions:   []string{".php"},
+		CommentStyle: model.CommentStyle{Block: true, Open: "/*", Close: "*/"},
+		PreserveFirst: []model.PreserveRule{
+			{Kind: model.PreserveBOM, Before: false},
+			{Kind: model.PreserveShebang, Before: false},
+			{Kind: model.PreservePHPOpen, Before: false},
+		},
+	}
+}
+
 // agplConfig is the canonical apply config: AGPL, reuse+notice, an explicit year so
 // the rendered header is deterministic and independent of the wall clock.
 func agplConfig() model.Config {
@@ -368,6 +385,34 @@ func TestApplyFile(t *testing.T) {
 		assert.Empty(t, diff2)
 		assert.Equal(t, once, twice)
 	})
+}
+
+// TestApplyFileShebangPHPIdempotent is the applier-level regression guard for the
+// universal-shebang fix on a BLOCK-comment type. A PHP CLI script begins with a "#!"
+// line then "<?php"; the header must land after both, and a second apply must be a
+// byte-identical no-op. Before the fix the header was spliced above the shebang, so the
+// second pass re-detected differently and the result was not idempotent.
+func TestApplyFileShebangPHPIdempotent(t *testing.T) {
+	content := []byte("#!/usr/bin/env php\n<?php\necho 'hi';\n")
+
+	once, _, action1, err := ApplyFile(content, phpFileType(), agplHeaderFunc(t))
+	require.NoError(t, err)
+	require.Equal(t, "insert", action1)
+
+	got := string(once)
+	assert.True(t, strings.HasPrefix(got, "#!/usr/bin/env php\n<?php\n"),
+		"the shebang stays line 1 and <?php line 2, with the header after both; got %q", got)
+	idxShebang := strings.Index(got, "#!")
+	idxHeader := strings.Index(got, "SPDX-License-Identifier: AGPL-3.0-or-later")
+	require.GreaterOrEqual(t, idxHeader, 0)
+	assert.Equal(t, 0, idxShebang, "the shebang must start at byte 0")
+	assert.Less(t, idxShebang, idxHeader, "the header is inserted after the shebang")
+
+	twice, diff2, action2, err := ApplyFile(once, phpFileType(), agplHeaderFunc(t))
+	require.NoError(t, err)
+	assert.Equal(t, "none", action2, "a second apply detects the managed header and changes nothing")
+	assert.Empty(t, diff2)
+	assert.Equal(t, once, twice, "apply twice must be byte-identical")
 }
 
 // --- ManageLicenseFiles ---------------------------------------------------

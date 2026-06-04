@@ -166,12 +166,16 @@ var builtin = []model.FileType{
 		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM), after(model.PreserveShebang)},
 	},
 
-	// PHP: header goes after the opening <?php tag.
+	// PHP: header goes after a CLI shebang (if any) and the opening <?php tag. The
+	// shebang is listed BEFORE php-open for table correctness/clarity; a "#!" line on
+	// a PHP CLI script is line 1, the <?php tag line 2, then the header. (The universal
+	// shebang preservation in render/detect already covers this; the explicit rule
+	// documents the ordering.)
 	{
 		Name:          "PHP",
 		Extensions:    []string{".php", ".phtml"},
 		CommentStyle:  block("/*", "*/"),
-		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM), after(model.PreservePHPOpen)},
+		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM), after(model.PreserveShebang), after(model.PreservePHPOpen)},
 	},
 
 	// Uncommentable formats: detected and reported, never written.

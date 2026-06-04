@@ -48,6 +48,35 @@ func hashFT() model.FileType {
 	}
 }
 
+// cFT is a block-comment type (C/C++ shape) that lists NO shebang rule -- only BOM.
+// It exists to prove the universal-shebang fix: PreserveBoundary must consume a leading
+// "#!" even though this type never lists PreserveShebang.
+func cFT() model.FileType {
+	return model.FileType{
+		Name:         "C",
+		Extensions:   []string{".c"},
+		CommentStyle: model.CommentStyle{Block: true, Open: "/*", Close: "*/"},
+		PreserveFirst: []model.PreserveRule{
+			{Kind: model.PreserveBOM, Before: false},
+		},
+	}
+}
+
+// phpFT is a block-comment type that preserves a (universal) shebang then the <?php
+// open tag, mirroring the builtin PHP table ordering.
+func phpFT() model.FileType {
+	return model.FileType{
+		Name:         "PHP",
+		Extensions:   []string{".php"},
+		CommentStyle: model.CommentStyle{Block: true, Open: "/*", Close: "*/"},
+		PreserveFirst: []model.PreserveRule{
+			{Kind: model.PreserveBOM, Before: false},
+			{Kind: model.PreserveShebang, Before: false},
+			{Kind: model.PreservePHPOpen, Before: false},
+		},
+	}
+}
+
 // xmlFT is a block-comment type that preserves an XML declaration and PHP open tag.
 func xmlFT() model.FileType {
 	return model.FileType{
@@ -272,6 +301,30 @@ func TestPreserveBoundary(t *testing.T) {
 			content:  "<?php\n// body\n",
 			ft:       xmlFT(),
 			wantRest: "// body\n",
+		},
+		{
+			// Regression: a block-comment type that does NOT list PreserveShebang must
+			// still have its leading "#!" consumed, so the header lands below the shebang.
+			name:     "shebang consumed on block type without a shebang rule",
+			content:  "#!/usr/bin/tcc -run\nint main(void){return 0;}\n",
+			ft:       cFT(),
+			wantRest: "int main(void){return 0;}\n",
+		},
+		{
+			// Regression: PHP CLI script -- the universal shebang AND the <?php open tag
+			// are both consumed, in file order, so the header lands after line 2.
+			name:     "php shebang then php-open both consumed",
+			content:  "#!/usr/bin/env php\n<?php\necho 'hi';\n",
+			ft:       phpFT(),
+			wantRest: "echo 'hi';\n",
+		},
+		{
+			// The universal rule is inert without a shebang: a block-comment file whose
+			// first line is ordinary code keeps the boundary at zero.
+			name:     "no shebang leaves block-type boundary at zero",
+			content:  "int main(void){return 0;}\n",
+			ft:       cFT(),
+			wantRest: "int main(void){return 0;}\n",
 		},
 		{
 			name:     "package decl (Before rule) is never consumed",

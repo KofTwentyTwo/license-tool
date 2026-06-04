@@ -91,11 +91,14 @@ func TestPreserveFirstOrdering(t *testing.T) {
 	require.Len(t, xml.PreserveFirst, 2)
 	assert.Equal(t, model.PreserveXMLDecl, xml.PreserveFirst[1].Kind)
 
-	// PHP: BOM then php-open.
+	// PHP: BOM, then shebang (CLI scripts), then php-open. The shebang precedes the
+	// <?php tag so a "#!" line stays line 1 on an executable PHP script.
 	php, ok := Lookup("index.php")
 	require.True(t, ok)
-	require.Len(t, php.PreserveFirst, 2)
-	assert.Equal(t, model.PreservePHPOpen, php.PreserveFirst[1].Kind)
+	require.Len(t, php.PreserveFirst, 3)
+	assert.Equal(t, model.PreserveBOM, php.PreserveFirst[0].Kind)
+	assert.Equal(t, model.PreserveShebang, php.PreserveFirst[1].Kind)
+	assert.Equal(t, model.PreservePHPOpen, php.PreserveFirst[2].Kind)
 
 	// Java: header goes BEFORE the package declaration.
 	java, ok := Lookup("Main.java")
