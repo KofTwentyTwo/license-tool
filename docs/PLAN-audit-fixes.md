@@ -1,10 +1,10 @@
 # PLAN: Audit Fixes
 
 ## Goal
-Resolve GitHub issues #12 through #27 locally, using TDD, while preserving the 100% CI coverage gate and leaving the branch ready for a manual review pass before any push or release.
+Resolve GitHub issues #6 through #27 locally, using TDD, while preserving the 100% CI coverage gate and leaving the branch ready for a manual review pass before any push or release.
 
 ## Approach
-Work on `feature/GH-12-27-audit-fixes` and split fixes into isolated worktrees by concern: write safety, CLI/reporting, policy/SPDX, dependency/release/docs, and shared header placement. Each slice starts with failing behavior tests, then minimal implementation, then local verification. Results are integrated back into this branch and finally merged to local `develop` only after the full test and CI-equivalent gate passes.
+Work on `feature/GH-12-27-audit-fixes` and split fixes into isolated worktrees by concern: header boundaries, file-type coverage, write safety, CLI/reporting, policy/SPDX, dependency/release/docs, and shared header placement. Each slice starts with failing behavior tests, then minimal implementation, then local verification. Results are integrated back into this branch and finally merged to local `develop` only after the full test and CI-equivalent gate passes.
 
 ## Files Affected
 - `cmd/license-tool/*`: CLI output, exit codes, command behavior tests, wizard filtering.
@@ -13,7 +13,8 @@ Work on `feature/GH-12-27-audit-fixes` and split fixes into isolated worktrees b
 - `internal/config/*`: flag/config layering and policy ID validation.
 - `internal/spdx/*`: renderable license contract.
 - `internal/resolve/*`: resolver tier validation and dependency manifest discovery.
-- `internal/render/*` and `internal/detect/*`: shared header placement behavior.
+- `internal/render/*`, `internal/detect/*`, `internal/header/*`: shared header placement behavior and preserve-first constructs.
+- `internal/filetype/*`, `internal/enumerate/*`: file-type coverage and shebang-based classification.
 - `.github/workflows/*`, `.goreleaser.yaml`: release supply-chain pinning.
 - `docs/*`, `SECURITY.md`, `.github/*`: public support and status scaffolding.
 

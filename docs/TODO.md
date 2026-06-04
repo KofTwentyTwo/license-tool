@@ -1,9 +1,22 @@
 # TODO: Audit Fixes
 
 ## Tracking
-- [ ] Worker agents assigned for all implementation slices.
+- [x] Worker agents assigned for all implementation slices.
+- [x] GitHub issue comments reviewed for #6 through #27.
 - [ ] Keep `docs/SESSION-STATE.md` current after each integrated slice.
 - [ ] Keep coverage at the repository gate: total coverage 100% for the gated set.
+
+## Header Boundary Preservation
+- [ ] #6: Preserve Go `//go:build` and `// +build` constraints before inserted headers.
+- [ ] #7: Preserve CSS `@charset` before inserted headers.
+- [ ] #8: Preserve HTML/XML `<!DOCTYPE>` before inserted headers.
+
+## File-Type Coverage
+- [ ] #9: Add Perl, PowerShell, R, Makefile, TOML, and Batch file-type support.
+- [ ] #10: Detect extensionless script type from shebang content.
+
+## README Docs
+- [ ] #11: Document the init wizard and audit findings summary accurately.
 
 ## Write Safety
 - [ ] #12: Make `license` honor write gates and either implement or reject commit options.
