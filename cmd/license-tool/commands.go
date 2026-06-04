@@ -184,9 +184,8 @@ func newApplyCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// config.Resolve already validates the merged license (which equals f.license
-			// whenever the flag is set) against the vendored SPDX list, so no second check
-			// is needed here.
+			// config.Resolve already validates that the merged license can be rendered
+			// for write operations, so no second check is needed here.
 			r, err := applier.Apply(path, cfg, applier.Options{
 				Write:             f.write,
 				AllowDirty:        f.allowDirty,
@@ -217,9 +216,8 @@ func newLicenseCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// config.Resolve already validates the merged license (which equals f.license
-			// whenever the flag is set) against the vendored SPDX list, so no second check
-			// is needed here.
+			// config.Resolve already validates that the merged license can be rendered
+			// for write operations, so no second check is needed here.
 			results, err := applier.ManageLicenseFiles(path, cfg, applier.Options{
 				Write:             f.write,
 				AllowDirty:        f.allowDirty,
@@ -261,11 +259,15 @@ var interactiveCollect = collectInteractive
 // starting from the built-in Defaults so unset answers carry the documented default
 // behavior. WHY validation lives here, not in the wizard: the wizard is the
 // interactive shell (excluded from coverage); answersToConfig is the single tested
-// gate that both the TTY and flag-only paths funnel through, so an invalid license
-// or empty holder is rejected identically regardless of how the answers arrived.
+// gate that both the TTY and flag-only paths funnel through, so an invalid or
+// unrenderable license and an empty holder are rejected identically regardless of
+// how the answers arrived.
 func answersToConfig(a initAnswers) (model.Config, error) {
 	if !spdx.Validate(a.License) {
 		return model.Config{}, fmt.Errorf("init: %q is not a recognized SPDX license identifier", a.License)
+	}
+	if _, ok := spdx.Lookup(a.License); !ok {
+		return model.Config{}, fmt.Errorf("init: %q is a recognized SPDX license identifier, but license-tool cannot render it", a.License)
 	}
 	if a.Holder == "" {
 		return model.Config{}, fmt.Errorf("init: copyright holder is required")

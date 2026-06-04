@@ -223,6 +223,27 @@ func idsFrom(s *store, err error) []string {
 	return out
 }
 
+// RenderableIDs returns every SPDX identifier with vendored license detail the tool
+// can render, sorted by id. It is intentionally narrower than IDs(), which returns
+// every non-deprecated id from the full SPDX index.
+func RenderableIDs() []string {
+	return renderableIDsFrom(get())
+}
+
+// renderableIDsFrom builds the sorted id list from the curated rendering set. On a
+// snapshot load error it returns nil, matching IDs()'s empty-picker degradation.
+func renderableIDsFrom(s *store, err error) []string {
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(s.licenses))
+	for id := range s.licenses {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // CommonIDs returns a curated, display-ordered shortlist of the licenses users pick
 // most often. WHY a hand-ordered slice rather than a sorted subset of IDs: the order
 // is editorial (most-recommended first, permissive before copyleft), so the picker

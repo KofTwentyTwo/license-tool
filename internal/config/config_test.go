@@ -586,6 +586,30 @@ func TestResolveLicenseValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("valid unrenderable spdx id passes read-only resolution", func(t *testing.T) {
+		isolateXDG(t)
+		repo := t.TempDir()
+		cfg, err := Resolve(repo, Flags{License: "Zlib", Holder: "Acme"}, Options{Interactive: false})
+		if err != nil {
+			t.Fatalf("Resolve error: %v", err)
+		}
+		if cfg.License != "Zlib" {
+			t.Errorf("license = %q", cfg.License)
+		}
+	})
+
+	t.Run("valid unrenderable spdx id rejected for write resolution", func(t *testing.T) {
+		isolateXDG(t)
+		repo := t.TempDir()
+		_, err := Resolve(repo, Flags{License: "Zlib", Holder: "Acme"}, Options{Interactive: false, RequireApply: true})
+		if err == nil {
+			t.Fatal("unrenderable SPDX id should be rejected for write resolution")
+		}
+		if !strings.Contains(err.Error(), `"Zlib"`) || !strings.Contains(err.Error(), "cannot render") {
+			t.Fatalf("error should name the unrenderable SPDX id, got %v", err)
+		}
+	})
+
 	t.Run("unknown spdx id rejected", func(t *testing.T) {
 		isolateXDG(t)
 		repo := t.TempDir()
@@ -618,6 +642,84 @@ func TestResolveBadConfigSurfaces(t *testing.T) {
 		}
 	})
 
+	t.Run("invalid policy required expression errors with field and value", func(t *testing.T) {
+		isolateXDG(t)
+		repo := t.TempDir()
+		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\npolicy:\n  required: NOT-A-LICENSE\n")
+		_, err := Resolve(repo, Flags{}, Options{Interactive: false})
+		if err == nil {
+			t.Fatal("invalid policy.required should error")
+		}
+		if !strings.Contains(err.Error(), "policy.required") || !strings.Contains(err.Error(), "NOT-A-LICENSE") {
+			t.Fatalf("error should name policy.required and the bad value, got %v", err)
+		}
+	})
+
+	t.Run("policy required expression rejected because enforcement is exact id", func(t *testing.T) {
+		isolateXDG(t)
+		repo := t.TempDir()
+		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\npolicy:\n  required: MIT OR Apache-2.0\n")
+		_, err := Resolve(repo, Flags{}, Options{Interactive: false})
+		if err == nil {
+			t.Fatal("policy.required expression should error")
+		}
+		if !strings.Contains(err.Error(), "policy.required") || !strings.Contains(err.Error(), "MIT OR Apache-2.0") {
+			t.Fatalf("error should name policy.required and the bad value, got %v", err)
+		}
+	})
+
+	t.Run("invalid policy allow expression errors with field and value", func(t *testing.T) {
+		isolateXDG(t)
+		repo := t.TempDir()
+		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\npolicy:\n  allow: [MIT AND]\n")
+		_, err := Resolve(repo, Flags{}, Options{Interactive: false})
+		if err == nil {
+			t.Fatal("invalid policy.allow should error")
+		}
+		if !strings.Contains(err.Error(), "policy.allow") || !strings.Contains(err.Error(), "MIT AND") {
+			t.Fatalf("error should name policy.allow and the bad value, got %v", err)
+		}
+	})
+
+	t.Run("policy allow expression rejected because enforcement is exact id", func(t *testing.T) {
+		isolateXDG(t)
+		repo := t.TempDir()
+		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\npolicy:\n  allow: [MIT OR Apache-2.0]\n")
+		_, err := Resolve(repo, Flags{}, Options{Interactive: false})
+		if err == nil {
+			t.Fatal("policy.allow expression should error")
+		}
+		if !strings.Contains(err.Error(), "policy.allow") || !strings.Contains(err.Error(), "MIT OR Apache-2.0") {
+			t.Fatalf("error should name policy.allow and the bad value, got %v", err)
+		}
+	})
+
+	t.Run("invalid policy deny expression errors with field and value", func(t *testing.T) {
+		isolateXDG(t)
+		repo := t.TempDir()
+		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\npolicy:\n  deny: [GPL-2.0-typo]\n")
+		_, err := Resolve(repo, Flags{}, Options{Interactive: false})
+		if err == nil {
+			t.Fatal("invalid policy.deny should error")
+		}
+		if !strings.Contains(err.Error(), "policy.deny") || !strings.Contains(err.Error(), "GPL-2.0-typo") {
+			t.Fatalf("error should name policy.deny and the bad value, got %v", err)
+		}
+	})
+
+	t.Run("policy deny expression rejected because enforcement is exact id", func(t *testing.T) {
+		isolateXDG(t)
+		repo := t.TempDir()
+		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\npolicy:\n  deny: [GPL-2.0-only AND Apache-2.0]\n")
+		_, err := Resolve(repo, Flags{}, Options{Interactive: false})
+		if err == nil {
+			t.Fatal("policy.deny expression should error")
+		}
+		if !strings.Contains(err.Error(), "policy.deny") || !strings.Contains(err.Error(), "GPL-2.0-only AND Apache-2.0") {
+			t.Fatalf("error should name policy.deny and the bad value, got %v", err)
+		}
+	})
+
 	t.Run("policy from config carried through", func(t *testing.T) {
 		isolateXDG(t)
 		repo := t.TempDir()
@@ -642,6 +744,32 @@ policy:
 		}
 		if len(cfg.Policy.FailOn) != 1 || cfg.Policy.FailOn[0] != model.FailOnMissingHeader {
 			t.Errorf("policy.fail_on overridden wrong: %+v", cfg.Policy.FailOn)
+		}
+	})
+
+	t.Run("valid policy ids including unrenderable ids are preserved", func(t *testing.T) {
+		isolateXDG(t)
+		repo := t.TempDir()
+		writeFile(t, filepath.Join(repo, repoConfigName), `
+license: MIT
+holder: Acme
+policy:
+  required: Zlib
+  allow: [MIT, Zlib]
+  deny: [GPL-2.0-only]
+`)
+		cfg, err := Resolve(repo, Flags{}, Options{Interactive: false})
+		if err != nil {
+			t.Fatalf("Resolve error: %v", err)
+		}
+		if cfg.Policy.Required != "Zlib" {
+			t.Errorf("policy.required = %q", cfg.Policy.Required)
+		}
+		if len(cfg.Policy.Allow) != 2 || cfg.Policy.Allow[1] != "Zlib" {
+			t.Errorf("policy.allow should preserve valid ids: %+v", cfg.Policy.Allow)
+		}
+		if len(cfg.Policy.Deny) != 1 || cfg.Policy.Deny[0] != "GPL-2.0-only" {
+			t.Errorf("policy.deny should preserve valid ids: %+v", cfg.Policy.Deny)
 		}
 	})
 }

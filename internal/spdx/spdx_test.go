@@ -120,6 +120,14 @@ func TestIDs(t *testing.T) {
 	assert.Contains(t, ids, "MIT", "the canonical MIT id should be offered")
 }
 
+func TestRenderableIDs(t *testing.T) {
+	ids := RenderableIDs()
+	require.NotEmpty(t, ids, "the vendored snapshot must yield renderable ids")
+	assert.True(t, sort.StringsAreSorted(ids), "RenderableIDs() must be sorted")
+	assert.Contains(t, ids, "MIT", "curated MIT id should be renderable")
+	assert.NotContains(t, ids, "Zlib", "valid SPDX ids without vendored detail must not be renderable")
+}
+
 // TestCommonIDs confirms every curated shortlist id validates against the full
 // vendored index, so the picker can never present a "common" option that the rest
 // of the tool would later reject as an unknown SPDX id.

@@ -30,9 +30,9 @@ type initAnswers struct {
 
 // licenseSelectOptions builds the filterable license picker options: the curated
 // CommonIDs first (each labeled "<id> (common)" so a user knows they are the
-// recommended set), then the remaining non-deprecated SPDX ids in sorted order with
-// no duplicates. WHY common-first: the operator sees sensible defaults at the top
-// before the long alphabetical tail they can still filter into.
+// recommended set), then the remaining renderable SPDX ids in sorted order with no
+// duplicates. WHY common-first: the operator sees sensible defaults at the top
+// before the alphabetical tail they can still filter into.
 func licenseSelectOptions() []huh.Option[string] {
 	common := spdx.CommonIDs()
 	seen := make(map[string]bool, len(common))
@@ -41,7 +41,7 @@ func licenseSelectOptions() []huh.Option[string] {
 		seen[id] = true
 		opts = append(opts, huh.NewOption(id+" (common)", id))
 	}
-	for _, id := range spdx.IDs() {
+	for _, id := range spdx.RenderableIDs() {
 		if seen[id] {
 			continue
 		}
