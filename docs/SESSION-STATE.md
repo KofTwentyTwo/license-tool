@@ -1,27 +1,16 @@
 # Session State
 
 ## Current Branch
-`feature/GH-12-27-audit-fixes`
+`feature/GH-29-init-tui-wizard`
 
 ## Current Objective
-Resolve GitHub issues #6 through #27 using TDD, keep the 100% coverage gate passing, and merge the passing local feature branch back to local `develop`.
+Implement GitHub issue #29: redesign `license-tool init` as a full-screen configuration TUI with live example source preview, persisted include/exclude defaults, and 100% test coverage.
 
 ## Status
-- Branch created from `develop`.
-- Audit issues filed and de-duplicated against existing open issues #6 through #11.
-- Plan and TODO created.
-- Worktrees created under `/private/tmp/license-tool-worktrees/` for write safety, CLI reporting, SPDX/policy, dependency/release/docs, and header placement slices.
-- Worker agents assigned:
-  - Write safety: #12, #13, #14, #15 on `feature/GH-12-27-write-safety`.
-  - CLI/reporting: #16, #17, #18, #25 on `feature/GH-12-27-cli-reporting`.
-  - SPDX/policy: #19, #20 on `feature/GH-12-27-spdx-policy`.
-  - Dependency/release/docs: #11, #21, #22, #23, #26 on `feature/GH-12-27-deps-release-docs`.
-  - Header placement: #6, #7, #8, #24, #27 on `feature/GH-12-27-header-placement`.
-  - File-type coverage: #9 and #10 on `feature/GH-9-10-filetype-coverage`.
-- GitHub issue comments reviewed for #6 through #27 and closed tracker #3.
-- Worker branches integrated into `feature/GH-12-27-audit-fixes`.
-- Local gates passed: `gofmt -l .`, `go vet ./...`, `golangci-lint run`, `go test ./... -race -cover`, 100% configured coverage gate, `go build ./...`, `goreleaser check`, and `gitleaks detect`.
-- `feature/GH-12-27-audit-fixes` fast-forward merged into local `develop`.
+- `v0.3.0` is released.
+- Feature branch created from `main` at `7e177a9`.
+- Plan created in `docs/PLAN-GH-29-init-tui-wizard.md`.
+- Feature-definition agent Huygens is running.
 
 ## Next Step
-Manual review and testing before any push to GitHub, promotion to `main`, tag, or release.
+Split implementation into worker-owned slices and integrate each behind tests.
