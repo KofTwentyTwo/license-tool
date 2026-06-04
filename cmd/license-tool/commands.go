@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -76,8 +77,13 @@ type auditFlags struct {
 	format      string
 	output      string
 	deps        bool
+	noDeps      bool
 	resolveDeps string
 	failOn      []string
+}
+
+func (f auditFlags) includeDeps() bool {
+	return f.deps && !f.noDeps
 }
 
 func newAuditCmd(shared *sharedFlags) *cobra.Command {
@@ -90,22 +96,28 @@ func newAuditCmd(shared *sharedFlags) *cobra.Command {
 			path := argPath(args)
 			cfg, err := config.Resolve(path, sharedToFlags(shared), config.Options{Interactive: false})
 			if err != nil {
-				return err
+				return usageError(err)
 			}
 			format, err := report.ParseFormat(f.format)
 			if err != nil {
-				return err
+				return usageError(err)
+			}
+			if err := validateResolveDeps(f.resolveDeps); err != nil {
+				return usageError(err)
 			}
 			r, err := report.Audit(path, cfg, report.Options{
 				Format:            format,
-				IncludeDeps:       f.deps,
+				IncludeDeps:       f.includeDeps(),
 				ResolveDeps:       f.resolveDeps,
 				AllowToolShellOut: f.resolveDeps == "tool",
 			}, buildAuditPipeline(cfg, shared))
 			if err != nil {
+				return internalError(err)
+			}
+			if err := renderCommandReport(cmd, f.output, r, format); err != nil {
 				return err
 			}
-			return report.Render(cmd.OutOrStdout(), r, format)
+			return nil
 		},
 	}
 	bindAuditFlags(cmd, f, false)
@@ -122,23 +134,36 @@ func newCheckCmd(shared *sharedFlags) *cobra.Command {
 			path := argPath(args)
 			cfg, err := config.Resolve(path, sharedToFlags(shared), config.Options{Interactive: false})
 			if err != nil {
-				return err
+				return usageError(err)
+			}
+			if cmd.Flags().Changed("fail-on") {
+				failOn, err := parseFailOnFlags(f.failOn)
+				if err != nil {
+					return usageError(err)
+				}
+				cfg.Policy.FailOn = failOn
 			}
 			format, err := report.ParseFormat(f.format)
 			if err != nil {
-				return err
+				return usageError(err)
 			}
-			code, err := report.Check(path, cfg, report.Options{
+			if err := validateResolveDeps(f.resolveDeps); err != nil {
+				return usageError(err)
+			}
+			r, err := report.Audit(path, cfg, report.Options{
 				Format:            format,
-				IncludeDeps:       f.deps,
+				IncludeDeps:       f.includeDeps(),
 				ResolveDeps:       f.resolveDeps,
 				AllowToolShellOut: f.resolveDeps == "tool",
 			}, buildAuditPipeline(cfg, shared))
 			if err != nil {
+				return internalError(err)
+			}
+			if err := renderCommandReport(cmd, f.output, r, format); err != nil {
 				return err
 			}
-			if code != 0 {
-				os.Exit(code)
+			if !r.Passed {
+				return withExitCode(exitCheckFailure, errors.New("check failed: policy conditions were met"))
 			}
 			return nil
 		},
@@ -154,6 +179,7 @@ func bindAuditFlags(cmd *cobra.Command, f *auditFlags, isCheck bool) {
 	cmd.Flags().StringVar(&f.format, "format", defaultFormat, "output format: text|json|markdown")
 	cmd.Flags().StringVar(&f.output, "output", "", "write report to file instead of stdout")
 	cmd.Flags().BoolVar(&f.deps, "deps", true, "resolve dependency licenses")
+	cmd.Flags().BoolVar(&f.noDeps, "no-deps", false, "skip dependency license resolution")
 	cmd.Flags().StringVar(&f.resolveDeps, "resolve-deps", "ondisk", "dependency resolution tier: ondisk|tool|off")
 	if isCheck {
 		cmd.Flags().StringArrayVar(&f.failOn, "fail-on", []string{"missing-header", "unknown-license", "policy-violation"}, "conditions that cause a non-zero exit")
@@ -184,11 +210,11 @@ func newApplyCmd(shared *sharedFlags) *cobra.Command {
 			path := argPath(args)
 			cfg, err := config.Resolve(path, applyToFlags(shared, f), config.Options{Interactive: isTTY(), RequireApply: true})
 			if err != nil {
-				return err
+				return usageError(err)
 			}
 			format, err := report.ParseFormat(f.format)
 			if err != nil {
-				return err
+				return usageError(err)
 			}
 			// config.Resolve already validates the merged license (which equals f.license
 			// whenever the flag is set) against the vendored SPDX list, so no second check
@@ -204,9 +230,12 @@ func newApplyCmd(shared *sharedFlags) *cobra.Command {
 				ManageLicenseFile: cfg.ManageLicenseFile,
 			})
 			if err != nil {
-				return err
+				return writeOrInternalError(err)
 			}
-			return report.Render(cmd.OutOrStdout(), r, format)
+			if err := report.Render(cmd.OutOrStdout(), r, format); err != nil {
+				return internalError(err)
+			}
+			return nil
 		},
 	}
 	bindApplyFlags(cmd, f)
@@ -224,7 +253,7 @@ func newLicenseCmd(shared *sharedFlags) *cobra.Command {
 			path := argPath(args)
 			cfg, err := config.Resolve(path, applyToFlags(shared, f), config.Options{Interactive: isTTY(), RequireApply: true})
 			if err != nil {
-				return err
+				return usageError(err)
 			}
 			// config.Resolve already validates the merged license (which equals f.license
 			// whenever the flag is set) against the vendored SPDX list, so no second check
@@ -240,7 +269,7 @@ func newLicenseCmd(shared *sharedFlags) *cobra.Command {
 				ManageLicenseFile: true,
 			})
 			if err != nil {
-				return err
+				return writeOrInternalError(err)
 			}
 			out := cmd.OutOrStdout()
 			for _, fr := range results {
@@ -254,6 +283,91 @@ func newLicenseCmd(shared *sharedFlags) *cobra.Command {
 	}
 	bindApplyFlags(cmd, f)
 	return cmd
+}
+
+func isWriteRefusal(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "refusing to write") || strings.Contains(msg, "already exists (use --force)")
+}
+
+func usageError(err error) error {
+	return withExitCode(exitUsage, err)
+}
+
+func internalError(err error) error {
+	return withExitCode(exitInternal, err)
+}
+
+func writeOrInternalError(err error) error {
+	if isWriteRefusal(err) {
+		return withExitCode(exitWriteRefused, err)
+	}
+	return internalError(err)
+}
+
+func renderCommandReport(cmd *cobra.Command, output string, r model.Report, format report.Format) error {
+	if output == "" {
+		if err := report.Render(cmd.OutOrStdout(), r, format); err != nil {
+			return internalError(err)
+		}
+		return nil
+	}
+
+	f, err := os.Create(output)
+	if err != nil {
+		return internalError(fmt.Errorf("report: create output %s: %w", output, err))
+	}
+	renderErr := report.Render(f, r, format)
+	closeErr := f.Close()
+	if renderErr != nil {
+		return internalError(renderErr)
+	}
+	if closeErr != nil {
+		return internalError(fmt.Errorf("report: close output %s: %w", output, closeErr))
+	}
+	return nil
+}
+
+func parseFailOnFlags(raw []string) ([]model.FailCondition, error) {
+	tokens := splitFlagTokens(raw)
+	out := make([]model.FailCondition, 0, len(tokens))
+	for _, token := range tokens {
+		switch token {
+		case model.FailOnMissingHeader.String():
+			out = append(out, model.FailOnMissingHeader)
+		case model.FailOnUnknownLicense.String():
+			out = append(out, model.FailOnUnknownLicense)
+		case model.FailOnPolicyViolation.String():
+			out = append(out, model.FailOnPolicyViolation)
+		case model.FailOnUnresolvedDependency.String():
+			out = append(out, model.FailOnUnresolvedDependency)
+		default:
+			return nil, fmt.Errorf("check: unknown fail-on condition %q", token)
+		}
+	}
+	return out, nil
+}
+
+func splitFlagTokens(raw []string) []string {
+	var tokens []string
+	for _, item := range raw {
+		for _, token := range strings.Split(item, ",") {
+			token = strings.TrimSpace(token)
+			if token != "" {
+				tokens = append(tokens, token)
+			}
+		}
+	}
+	return tokens
+}
+
+func validateResolveDeps(raw string) error {
+	switch raw {
+	case "ondisk", "tool", "off":
+		return nil
+	default:
+		return fmt.Errorf("audit: unknown dependency resolver tier %q (expected ondisk|tool|off)", raw)
+	}
 }
 
 // bindApplyFlags binds the apply/license flag set shared by both commands.
@@ -327,15 +441,15 @@ func newInitCmd(shared *sharedFlags) *cobra.Command {
 				Excludes:          shared.exclude,
 			}
 			if err := interactiveCollect(&a, isTTY()); err != nil {
-				return err
+				return usageError(err)
 			}
 			cfg, err := answersToConfig(a)
 			if err != nil {
-				return err
+				return usageError(err)
 			}
 			target, err := config.WriteFile(path, cfg, f.force)
 			if err != nil {
-				return err
+				return writeOrInternalError(err)
 			}
 			fmt.Fprintf(out, "wrote %s\n", target)
 			return nil
