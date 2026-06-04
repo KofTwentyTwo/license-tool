@@ -36,21 +36,31 @@ fi
 # ---------------------------------------------------------------------------
 # Gate 2/6: Static analysis
 # ---------------------------------------------------------------------------
-echo "=== Gate 2/6: go vet ==="
+echo "=== Gate 2/6: static analysis ==="
 if go vet ./...; then
    pass "go vet"
 else
    fail "go vet reported problems"
 fi
+if golangci-lint run; then
+   pass "golangci-lint run"
+else
+   fail "golangci-lint reported problems"
+fi
 
 # ---------------------------------------------------------------------------
-# Gate 3/6: Tests with the race detector
+# Gate 3/6: Tests with the race detector and coverage gate
 # ---------------------------------------------------------------------------
-echo "=== Gate 3/6: go test -race ==="
-if go test ./... -race; then
-   pass "go test ./... -race"
+echo "=== Gate 3/6: go test -race + coverage ==="
+if go test ./... -race -coverpkg=./internal/...,./cmd/... -covermode=atomic -coverprofile=cover.out; then
+   pass "go test ./... -race with coverage profile"
 else
    fail "tests failed under the race detector"
+fi
+if go run github.com/vladopajic/go-test-coverage/v2@v2.18.8 --config=.testcoverage.yml; then
+   pass "100% coverage gate"
+else
+   fail "coverage gate failed"
 fi
 
 # ---------------------------------------------------------------------------

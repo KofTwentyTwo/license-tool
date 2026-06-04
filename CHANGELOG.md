@@ -7,8 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-04
+
+### Added
+- Added first-class header support for Perl, PowerShell, R, Makefile, TOML, and Batch files.
+- Added conservative shebang-based type detection for extensionless scripts.
+- Added GitHub issue templates, a pull request template, support guidance, and refreshed security-policy documentation.
+
+### Changed
+- Aligned init/apply/license SPDX validation with the licenses that can actually be rendered by the bundled SPDX data.
+- Validated policy `required`, `allow`, and `deny` entries as exact SPDX identifiers, matching the current exact-match policy engine.
+- Extended dependency audit discovery to nested manifests while preserving ignore and exclude behavior.
+- Made Gradle tool-tier dependency resolution report an explicit unsupported reason.
+- Pinned release workflow actions and GoReleaser, and updated release packaging to publish the Homebrew cask.
+
 ### Fixed
 - Preserve leading Go build constraints, CSS `@charset` rules, and markup doctypes before inserted headers so `apply` does not silently change build selection, stylesheet encoding, or browser rendering mode.
+- Preserve Python `coding=` and `coding:` pragmas before inserted headers.
+- Centralized header sentinel and placement logic so audit and render paths agree on preserve-first rules.
+- Made the `license` command use the same write safety gates and commit support as `apply`.
+- Scoped apply/license commits to files touched by the license run so unrelated dirty working-tree changes are not staged.
+- Made `apply` honor include and gitignore scope controls before writing files.
+- Rendered unified diffs for dry-run `apply` and `license` runs, including JSON diff entries only when present.
+- Restored CLI error output and documented exit-code behavior.
+- Made `check --fail-on` override policy fail conditions, including repeated and comma-separated flag values.
+- Honored audit/check `--output` controls, rendered check reports, and bound the documented `--no-deps` flag.
+- Rejected invalid `--resolve-deps` values instead of silently falling back to `ondisk`.
 
 ## [0.2.1] - 2026-06-04
 

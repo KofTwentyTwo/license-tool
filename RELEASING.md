@@ -37,8 +37,9 @@ git ls-remote --heads origin
    ./scripts/verify-release.sh
    ```
 
-   It runs, in order: format/vet/lint/test, `goreleaser check`, a
-   `goreleaser release --snapshot --clean` dry run, tap repo and token existence,
+   It runs, in order: formatting, vet, `golangci-lint`, race tests with the
+   same coverage profile used by CI, the 100% coverage checker, `goreleaser check`,
+   a `goreleaser release --snapshot --clean` dry run, tap repo and token existence,
    the CHANGELOG date check, the SECURITY/README content checks, and a clean-tree check.
 
    You can run the individual GoReleaser gates directly:
@@ -47,7 +48,8 @@ git ls-remote --heads origin
    gofmt -l .
    go vet ./...
    golangci-lint run
-   go test ./... -race -cover
+   go test ./... -race -coverpkg=./internal/...,./cmd/... -covermode=atomic -coverprofile=cover.out
+   go run github.com/vladopajic/go-test-coverage/v2@v2.18.8 --config=.testcoverage.yml
    goreleaser check
    goreleaser release --snapshot --clean
    ```
@@ -77,19 +79,20 @@ From `main`:
 2. Commit changelog changes:
 
    ```bash
-   git commit -am "Update CHANGELOG for v$VERSION"
+   git commit -am "docs: changelog for v$VERSION"
    ```
 
-3. Tag and push:
+3. Push `main` and wait for CI and CodeQL to pass on the release commit.
+4. Tag and push. Prefer a signed annotated tag:
 
    ```bash
-   git tag vX.Y.Z
+   git tag -s vX.Y.Z -m "vX.Y.Z"
    git push origin vX.Y.Z
    ```
 
 The `Release` workflow runs `goreleaser release --clean`, which cross-compiles the
 mac/linux arm64+amd64 and windows amd64 binaries, builds the archives and `checksums.txt`,
-creates the GitHub Release, and publishes the Homebrew formula to:
+creates the GitHub Release, and publishes the Homebrew cask to:
 
 ```text
 KofTwentyTwo/homebrew-tap
@@ -98,7 +101,7 @@ KofTwentyTwo/homebrew-tap
 End users install with:
 
 ```bash
-brew install KofTwentyTwo/tap/license-tool
+brew install --cask KofTwentyTwo/tap/license-tool
 ```
 
 ## Required GitHub Setup
@@ -116,7 +119,7 @@ HOMEBREW_TAP_TOKEN
 ```
 
 The token needs contents write access to `KofTwentyTwo/homebrew-tap`, because the release
-workflow checks out that repository and commits formula updates. Do not hardcode this token
+workflow checks out that repository and commits cask updates. Do not hardcode this token
 in workflow files.
 
 Before the first production release:
