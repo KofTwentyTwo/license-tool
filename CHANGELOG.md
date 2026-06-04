@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Preserve leading Go build constraints, CSS `@charset` rules, and markup doctypes before inserted headers so `apply` does not silently change build selection, stylesheet encoding, or browser rendering mode.
+
 ## [0.2.1] - 2026-06-04
 
 ### Fixed

@@ -250,6 +250,77 @@ func TestDetectPreserveBoundaryError(t *testing.T) {
 	assert.Equal(t, model.DetectedHeader{}, got)
 }
 
+func TestDetectFindsManagedHeaderAfterPreserveFirstConstructs(t *testing.T) {
+	goFT := model.FileType{
+		Name:         "Go",
+		CommentStyle: model.CommentStyle{Block: true, Open: "/*", Close: "*/"},
+		PreserveFirst: []model.PreserveRule{
+			{Kind: model.PreserveBOM, Before: false},
+			{Kind: model.PreserveGoBuildConstraint, Before: false},
+			{Kind: model.PreservePackageDecl, Before: true},
+		},
+	}
+	cssFT := model.FileType{
+		Name:         "CSS",
+		CommentStyle: model.CommentStyle{Block: true, Open: "/*", Close: "*/"},
+		PreserveFirst: []model.PreserveRule{
+			{Kind: model.PreserveBOM, Before: false},
+			{Kind: model.PreserveCSSCharset, Before: false},
+		},
+	}
+	markupFT := model.FileType{
+		Name:         "XML/HTML",
+		CommentStyle: model.CommentStyle{Block: true, Open: "<!--", Close: "-->"},
+		PreserveFirst: []model.PreserveRule{
+			{Kind: model.PreserveBOM, Before: false},
+			{Kind: model.PreserveXMLDecl, Before: false},
+			{Kind: model.PreserveDoctype, Before: false},
+		},
+	}
+
+	cases := []struct {
+		name    string
+		ft      model.FileType
+		prefix  string
+		header  string
+		trailer string
+	}{
+		{
+			name:    "go build constraint",
+			ft:      goFT,
+			prefix:  "//go:build linux\n\n",
+			header:  "/*\n  SPDX-License-Tool: " + Sentinel + "\n  SPDX-License-Identifier: MIT\n*/\n\n",
+			trailer: "package main\n",
+		},
+		{
+			name:    "css charset",
+			ft:      cssFT,
+			prefix:  "@charset \"UTF-8\";\n",
+			header:  "/*\n  SPDX-License-Tool: " + Sentinel + "\n  SPDX-License-Identifier: MIT\n*/\n\n",
+			trailer: "body {}\n",
+		},
+		{
+			name:    "doctype",
+			ft:      markupFT,
+			prefix:  "<!DOCTYPE html>\n",
+			header:  "<!--\n  SPDX-License-Tool: " + Sentinel + "\n  SPDX-License-Identifier: MIT\n-->\n\n",
+			trailer: "<html></html>\n",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			content := []byte(c.prefix + c.header + c.trailer)
+			got, err := Detect(content, c.ft)
+			require.NoError(t, err)
+			require.True(t, got.Present)
+			assert.True(t, got.ViaSentinel)
+			assert.Equal(t, len(c.prefix), got.StartByte)
+			assert.Equal(t, len(c.prefix)+len(c.header), got.EndByte)
+		})
+	}
+}
+
 // --- PreserveBoundary --------------------------------------------------------
 
 func TestPreserveBoundary(t *testing.T) {

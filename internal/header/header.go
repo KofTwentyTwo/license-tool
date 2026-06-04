@@ -25,6 +25,9 @@ func PreserveBoundary(content []byte, ft model.FileType) int {
 	allowXML := HasRule(ft, model.PreserveXMLDecl, false)
 	allowPHP := HasRule(ft, model.PreservePHPOpen, false)
 	allowPragma := HasRule(ft, model.PreserveCodingPragma, false)
+	allowGoBuild := HasRule(ft, model.PreserveGoBuildConstraint, false)
+	allowCSSCharset := HasRule(ft, model.PreserveCSSCharset, false)
+	allowDoctype := HasRule(ft, model.PreserveDoctype, false)
 
 	for pos < len(content) {
 		lineEnd := LineEndOffset(content, pos)
@@ -40,6 +43,15 @@ func PreserveBoundary(content []byte, ft model.FileType) int {
 		case allowPHP && strings.HasPrefix(strings.TrimSpace(trimmed), "<?php"):
 			consumed = true
 		case allowPragma && IsCodingPragma(trimmed):
+			consumed = true
+		case allowGoBuild:
+			if next, ok := GoBuildConstraintBoundary(content, pos); ok {
+				pos = next
+				continue
+			}
+		case allowCSSCharset && IsCSSCharset(trimmed):
+			consumed = true
+		case allowDoctype && IsDoctype(trimmed):
 			consumed = true
 		}
 
@@ -71,6 +83,44 @@ func LineEndOffset(content []byte, pos int) int {
 		}
 	}
 	return len(content)
+}
+
+// GoBuildConstraintBoundary advances past a leading Go build-constraint block and
+// its following blank separator, if present.
+func GoBuildConstraintBoundary(content []byte, pos int) (int, bool) {
+	current := pos
+	sawConstraint := false
+	for current < len(content) {
+		lineEnd := LineEndOffset(content, current)
+		lineText := string(content[current:lineEnd])
+		trimmed := strings.TrimSpace(strings.TrimRight(lineText, "\r\n"))
+
+		switch {
+		case isGoBuildConstraint(trimmed):
+			sawConstraint = true
+			current = lineEnd
+		default:
+			if sawConstraint && trimmed == "" {
+				return lineEnd, true
+			}
+			return current, sawConstraint
+		}
+	}
+	return current, sawConstraint
+}
+
+func isGoBuildConstraint(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "//go:build") || strings.HasPrefix(trimmed, "// +build")
+}
+
+// IsCSSCharset reports whether trimmed is a CSS @charset at-rule.
+func IsCSSCharset(trimmed string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(trimmed)), "@charset")
+}
+
+// IsDoctype reports whether trimmed is a markup doctype declaration.
+func IsDoctype(trimmed string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(trimmed)), "<!doctype")
 }
 
 // IsCodingPragma reports whether trimmed is a Python/Ruby encoding pragma.

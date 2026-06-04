@@ -65,7 +65,7 @@ var builtin = []model.FileType{
 		Name:          "Go",
 		Extensions:    []string{".go"},
 		CommentStyle:  block("/*", "*/"),
-		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM), before(model.PreservePackageDecl)},
+		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM), after(model.PreserveGoBuildConstraint), before(model.PreservePackageDecl)},
 	},
 	{
 		Name:          "Swift",
@@ -95,7 +95,7 @@ var builtin = []model.FileType{
 		Name:          "CSS",
 		Extensions:    []string{".css", ".scss", ".less"},
 		CommentStyle:  block("/*", "*/"),
-		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM)},
+		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM), after(model.PreserveCSSCharset)},
 	},
 
 	// Hash-comment languages.
@@ -149,7 +149,7 @@ var builtin = []model.FileType{
 		Extensions:    []string{".xml", ".html", ".htm", ".xhtml", ".svg", ".pom"},
 		Filenames:     []string{"pom.xml"},
 		CommentStyle:  block("<!--", "-->"),
-		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM), after(model.PreserveXMLDecl)},
+		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM), after(model.PreserveXMLDecl), after(model.PreserveDoctype)},
 	},
 
 	// SQL and double-dash languages.

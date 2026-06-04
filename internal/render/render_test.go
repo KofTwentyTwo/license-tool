@@ -1,6 +1,7 @@
 package render
 
 import (
+	"go/build"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -442,6 +443,52 @@ func TestSpliceInsertAfterCodingEqualsPragma(t *testing.T) {
 	assert.Less(t, idxPragma, idxHeader, "header is placed after the coding pragma")
 }
 
+func TestSplicePreservesGoBuildConstraintSemantics(t *testing.T) {
+	ft, header := makeHeaderLF(t, "x.go")
+	content := []byte("//go:build linux\n\npackage foo\n")
+	require.False(t, goFileMatches(t, content, "darwin"),
+		"fixture must be excluded before the header is inserted")
+
+	out, action := Splice(content, ft, header, model.DetectedHeader{Present: false})
+	got := string(out)
+
+	assert.Equal(t, "insert", action)
+	assert.True(t, strings.HasPrefix(got, "//go:build linux\n\n"),
+		"build constraint and terminating blank line must remain before the header")
+	assert.False(t, goFileMatches(t, out, "darwin"),
+		"inserted header must not void the build constraint")
+}
+
+func TestSpliceInsertAfterCSSCharset(t *testing.T) {
+	ft, header := makeHeaderLF(t, "x.css")
+	content := []byte("@charset \"UTF-8\";\n.cafe { content: \"hello\"; }\n")
+
+	out, action := Splice(content, ft, header, model.DetectedHeader{Present: false})
+	got := string(out)
+
+	assert.Equal(t, "insert", action)
+	assert.True(t, strings.HasPrefix(got, "@charset \"UTF-8\";\n"),
+		"@charset must remain the first stylesheet bytes")
+	idxCharset := strings.Index(got, "@charset")
+	idxHeader := strings.Index(got, "SPDX-License-Identifier: MIT")
+	assert.Less(t, idxCharset, idxHeader, "header is placed after @charset")
+}
+
+func TestSpliceInsertAfterMarkupDoctype(t *testing.T) {
+	ft, header := makeHeaderLF(t, "index.html")
+	content := []byte("<!DOCTYPE html>\n<html lang=\"en\"></html>\n")
+
+	out, action := Splice(content, ft, header, model.DetectedHeader{Present: false})
+	got := string(out)
+
+	assert.Equal(t, "insert", action)
+	assert.True(t, strings.HasPrefix(got, "<!DOCTYPE html>\n"),
+		"doctype must remain the first document content")
+	idxDoctype := strings.Index(strings.ToLower(got), "<!doctype")
+	idxHeader := strings.Index(got, "SPDX-License-Identifier: MIT")
+	assert.Less(t, idxDoctype, idxHeader, "header is placed after doctype")
+}
+
 func TestSplicePreservesBOM(t *testing.T) {
 	ft, header := makeHeaderLF(t, "x.go")
 	content := append([]byte{0xEF, 0xBB, 0xBF}, []byte("package main\n")...)
@@ -771,4 +818,17 @@ func TestSpliceNeverAltersBytesOutsideHeaderRegion(t *testing.T) {
 	require.NotEqual(t, -1, pkgIdx)
 	assert.Equal(t, string(content), string(out[pkgIdx:]),
 		"all original bytes from the insertion point survive unchanged")
+}
+
+func goFileMatches(t *testing.T, content []byte, goos string) bool {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "buildtag.go"), content, 0o644))
+
+	ctxt := build.Default
+	ctxt.GOOS = goos
+	ctxt.GOARCH = "amd64"
+	matches, err := ctxt.MatchFile(dir, "buildtag.go")
+	require.NoError(t, err)
+	return matches
 }
