@@ -112,7 +112,8 @@ func Defaults() model.Config {
 // > built-in defaults. Lower layers seed the base; each higher layer overrides
 // only the fields it actually sets. After merging, required fields (license,
 // holder) are prompted for on a TTY (opts.Interactive) or hard-error otherwise.
-// The target license is validated against the vendored SPDX list.
+// The target license is validated against the vendored SPDX list. Write operations
+// additionally require a license id the tool can render from its curated templates.
 func Resolve(path string, flags Flags, opts Options) (model.Config, error) {
 	cfg := Defaults()
 
@@ -162,11 +163,19 @@ func Resolve(path string, flags Flags, opts Options) (model.Config, error) {
 		}
 	}
 
-	// Validate any resolved license against the vendored SPDX index. An empty license
-	// is valid on a read-only run (nothing to validate). WHY here and not per-layer:
-	// only the final, merged value matters.
-	if cfg.License != "" && !spdx.Validate(cfg.License) {
-		return model.Config{}, fmt.Errorf("config: %q is not a recognized SPDX license identifier", cfg.License)
+	// Validate any resolved license against the vendored SPDX index. Write operations
+	// also require the curated render set because apply/license/init cannot emit text
+	// for every valid SPDX id. WHY here and not per-layer: only the final, merged
+	// value matters.
+	if cfg.License != "" {
+		if !spdx.Validate(cfg.License) {
+			return model.Config{}, fmt.Errorf("config: %q is not a recognized SPDX license identifier", cfg.License)
+		}
+		if opts.RequireApply {
+			if _, ok := spdx.Lookup(cfg.License); !ok {
+				return model.Config{}, fmt.Errorf("config: %q is a recognized SPDX license identifier, but license-tool cannot render it", cfg.License)
+			}
+		}
 	}
 
 	return cfg, nil
@@ -385,12 +394,25 @@ func mergeSchema(cfg *model.Config, fs fileSchema) error {
 // overridden only when the file provides it.
 func mergePolicy(p *model.Policy, ps policySchema) error {
 	if ps.Required != "" {
+		if !spdx.Validate(ps.Required) {
+			return fmt.Errorf("config: policy.required %q is not a recognized SPDX license identifier", ps.Required)
+		}
 		p.Required = ps.Required
 	}
 	if len(ps.Allow) > 0 {
+		for _, id := range ps.Allow {
+			if !spdx.Validate(id) {
+				return fmt.Errorf("config: policy.allow %q is not a recognized SPDX license identifier", id)
+			}
+		}
 		p.Allow = append([]string(nil), ps.Allow...)
 	}
 	if len(ps.Deny) > 0 {
+		for _, id := range ps.Deny {
+			if !spdx.Validate(id) {
+				return fmt.Errorf("config: policy.deny %q is not a recognized SPDX license identifier", id)
+			}
+		}
 		p.Deny = append([]string(nil), ps.Deny...)
 	}
 	if len(ps.FailOn) > 0 {

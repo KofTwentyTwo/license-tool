@@ -163,15 +163,19 @@ func TestAccessorsWithLoadError(t *testing.T) {
 	assert.Equal(t, "", listVersionFrom(nil, errStore), "ListVersion must be empty on load error")
 
 	assert.Nil(t, idsFrom(nil, errStore), "IDs must be nil on load error so the picker degrades to empty")
+	assert.Nil(t, renderableIDsFrom(nil, errStore), "RenderableIDs must be nil on load error so the picker degrades to empty")
 }
 
 // TestAccessorsFromHelpersHappyPath confirms the extracted helpers preserve the
 // non-error behavior they were factored out of.
 func TestAccessorsFromHelpersHappyPath(t *testing.T) {
 	s := &store{
-		ids:      map[string]indexEntry{"MIT": {LicenseID: "MIT", Name: "MIT License"}},
-		licenses: map[string]model.License{"MIT": {SPDXID: "MIT", Text: "body"}},
-		version:  "test-1.0",
+		ids: map[string]indexEntry{"MIT": {LicenseID: "MIT", Name: "MIT License"}},
+		licenses: map[string]model.License{
+			"Apache-2.0": {SPDXID: "Apache-2.0", Text: "apache body"},
+			"MIT":        {SPDXID: "MIT", Text: "body"},
+		},
+		version: "test-1.0",
 	}
 
 	assert.True(t, validateFrom(s, nil)("MIT"))
@@ -185,6 +189,7 @@ func TestAccessorsFromHelpersHappyPath(t *testing.T) {
 	assert.False(t, ok)
 
 	assert.Equal(t, "test-1.0", listVersionFrom(s, nil))
+	assert.Equal(t, []string{"Apache-2.0", "MIT"}, renderableIDsFrom(s, nil))
 }
 
 // TestClassifyAllBranches drives every arm of classify, including the default

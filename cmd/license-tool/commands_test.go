@@ -601,6 +601,16 @@ func TestApplyCommand(t *testing.T) {
 		assert.Contains(t, err.Error(), `unknown format "xml"`)
 	})
 
+	t.Run("valid but non-curated license rejected before apply", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "main.go", "package main\n")
+		_, err := runRoot(t, "apply", dir, "--license", "Zlib", "--holder", "Acme")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"Zlib"`)
+		assert.Contains(t, err.Error(), "cannot render")
+		assert.NotContains(t, err.Error(), "unknown license")
+	})
+
 	t.Run("apply error: write in non-git dir without force", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, ".license-tool.yaml", configYAML)
@@ -653,13 +663,15 @@ func TestApplyCommand(t *testing.T) {
 		assert.Contains(t, gitOutput(t, dir, "status", "--porcelain"), "unrelated.go")
 	})
 
-	t.Run("valid but non-curated license is internal error", func(t *testing.T) {
+	t.Run("valid but non-curated license maps to usage error", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, "main.go", "package main\n")
 		stdout, stderr, code := executeRoot(t, "apply", dir, "--license", "Zlib", "--holder", "Acme")
-		assert.Equal(t, 4, code)
+		assert.Equal(t, 2, code)
 		assert.Empty(t, stdout)
-		assert.Contains(t, stderr, `unknown license "Zlib"`)
+		assert.Contains(t, stderr, `"Zlib"`)
+		assert.Contains(t, stderr, "cannot render")
+		assert.NotContains(t, stderr, "unknown license")
 	})
 
 	t.Run("render error is internal error", func(t *testing.T) {
@@ -750,15 +762,17 @@ func TestLicenseCommand(t *testing.T) {
 		assert.Contains(t, err.Error(), "not a recognized SPDX license identifier")
 	})
 
-	t.Run("valid but non-curated license surfaces a manage error", func(t *testing.T) {
-		// Zlib is a real SPDX id (passes config validation and spdx.Validate) but is
-		// outside the curated rendering set, so ManageLicenseFiles' spdx.Lookup fails
-		// and the command returns that error.
+	t.Run("valid but non-curated license rejected before rendering", func(t *testing.T) {
+		// Zlib is a real SPDX id, but this write path needs a license template the
+		// tool can render. The command must fail during config resolution rather than
+		// reaching ManageLicenseFiles and surfacing an unknown-license render error.
 		dir := t.TempDir()
 		writeFile(t, dir, "main.go", "package main\n")
 		_, err := runRoot(t, "license", dir, "--license", "Zlib", "--holder", "Acme")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unknown license")
+		assert.Contains(t, err.Error(), `"Zlib"`)
+		assert.Contains(t, err.Error(), "cannot render")
+		assert.NotContains(t, err.Error(), "unknown license")
 	})
 }
 
@@ -787,6 +801,16 @@ func TestInitCommand(t *testing.T) {
 		_, err := runRoot(t, "init", dir, "--holder", "Acme")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "SPDX license identifier")
+	})
+
+	t.Run("valid but non-curated license rejected before scaffold", func(t *testing.T) {
+		dir := t.TempDir()
+		_, err := runRoot(t, "init", dir, "--license", "Zlib", "--holder", "Acme")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"Zlib"`)
+		assert.Contains(t, err.Error(), "cannot render")
+		_, statErr := os.Stat(filepath.Join(dir, ".license-tool.yaml"))
+		assert.True(t, os.IsNotExist(statErr), "unsupported render license must not be scaffolded")
 	})
 
 	t.Run("existing file needs force", func(t *testing.T) {
@@ -894,6 +918,18 @@ func TestRenderCommandReportErrors(t *testing.T) {
 	err = renderCommandReport(root, filepath.Join(t.TempDir(), "report.txt"), model.Report{}, report.Format(99))
 	require.Error(t, err)
 	assert.Equal(t, exitInternal, exitCode(err))
+}
+
+func TestLicenseSelectOptions(t *testing.T) {
+	opts := licenseSelectOptions()
+	require.NotEmpty(t, opts, "license picker should offer renderable licenses")
+
+	values := make([]string, 0, len(opts))
+	for _, opt := range opts {
+		values = append(values, opt.Value)
+	}
+	assert.Contains(t, values, "MIT")
+	assert.NotContains(t, values, "Zlib", "picker must not offer a license the tool cannot render")
 }
 
 // TestInitCommandInteractiveCollectError covers the init RunE branch where the
