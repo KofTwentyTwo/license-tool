@@ -14,6 +14,7 @@ import (
 
 	"github.com/KofTwentyTwo/license-tool/internal/config"
 	"github.com/KofTwentyTwo/license-tool/internal/model"
+	"github.com/KofTwentyTwo/license-tool/internal/report"
 	"github.com/KofTwentyTwo/license-tool/internal/spdx"
 )
 
@@ -59,6 +60,18 @@ func runRoot(t *testing.T, args ...string) (string, error) {
 	root.SetArgs(args)
 	err := root.Execute()
 	return out.String(), err
+}
+
+func executeRoot(t *testing.T, args ...string) (stdout string, stderr string, code int) {
+	t.Helper()
+	root := newRootCmd(testBuildInfo)
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+	root.SetArgs(args)
+	code = execute(root)
+	return out.String(), errOut.String(), code
 }
 
 // writeFile writes content under dir/rel, creating parent directories, and returns
@@ -148,6 +161,63 @@ func TestVersionCommand(t *testing.T) {
 	assert.Contains(t, out, "SPDX license list: "+spdx.ListVersion())
 }
 
+func TestExecutePrintsReturnedUsageErrors(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t)
+
+	stdout, stderr, code := executeRoot(t, "audit", dir, "--format", "xml", "--deps=false")
+
+	assert.Equal(t, 2, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, `unknown format "xml"`)
+}
+
+func TestExecuteReturnsZeroOnSuccess(t *testing.T) {
+	isolateEnv(t)
+	stdout, stderr, code := executeRoot(t, "version")
+
+	assert.Equal(t, 0, code)
+	assert.Contains(t, stdout, "license-tool 1.2.3")
+	assert.Empty(t, stderr)
+}
+
+func TestExecuteMapsUntypedCobraErrors(t *testing.T) {
+	isolateEnv(t)
+	stdout, stderr, code := executeRoot(t, "bogus")
+
+	assert.Equal(t, 2, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, `unknown command "bogus"`)
+}
+
+func TestExecuteMapsWriteRefusals(t *testing.T) {
+	isolateEnv(t)
+	dir := t.TempDir()
+	writeFile(t, dir, ".license-tool.yaml", configYAML)
+	writeFile(t, dir, "main.go", "package main\n")
+
+	stdout, stderr, code := executeRoot(t, "apply", dir, "--write")
+
+	assert.Equal(t, 3, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "non-git directory without --force")
+}
+
+func TestExecuteMapsInternalErrors(t *testing.T) {
+	isolateEnv(t)
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+
+	stdout, stderr, code := executeRoot(t, "check", missing, "--deps=false")
+
+	assert.Equal(t, 4, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "enumerate")
+}
+
+func TestWithExitCodeNilError(t *testing.T) {
+	assert.NoError(t, withExitCode(exitUsage, nil))
+}
+
 func TestAuditCommand(t *testing.T) {
 	isolateEnv(t)
 
@@ -165,6 +235,27 @@ func TestAuditCommand(t *testing.T) {
 		out, err := runRoot(t, "audit", dir, "--format", "json", "--deps=false")
 		require.NoError(t, err)
 		assert.Contains(t, out, `"schema": "license-tool/report/v1"`)
+	})
+
+	t.Run("output file", func(t *testing.T) {
+		dir := fixtureDir(t)
+		outPath := filepath.Join(dir, "audit.json")
+		out, err := runRoot(t, "audit", dir, "--format", "json", "--output", outPath, "--deps=false")
+		require.NoError(t, err)
+		assert.Empty(t, out)
+
+		data, rerr := os.ReadFile(outPath)
+		require.NoError(t, rerr)
+		assert.Contains(t, string(data), `"schema": "license-tool/report/v1"`)
+	})
+
+	t.Run("output file create error is internal error", func(t *testing.T) {
+		dir := fixtureDir(t)
+		outPath := filepath.Join(dir, "missing", "audit.json")
+		stdout, stderr, code := executeRoot(t, "audit", dir, "--format", "json", "--output", outPath, "--deps=false")
+		assert.Equal(t, 4, code)
+		assert.Empty(t, stdout)
+		assert.Contains(t, stderr, "create output")
 	})
 
 	t.Run("markdown format", func(t *testing.T) {
@@ -219,6 +310,24 @@ func TestAuditCommand(t *testing.T) {
 		assert.Contains(t, out, "unresolved")
 	})
 
+	t.Run("no-deps alias skips dependency resolution", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML)
+		writeFile(t, dir, "package.json", `{"name":"x","dependencies":{"left-pad":"^1.0.0"}}`)
+		out, err := runRoot(t, "audit", dir, "--format", "json", "--no-deps")
+		require.NoError(t, err)
+		assert.Contains(t, out, `"dependencies": []`)
+		assert.NotContains(t, out, "left-pad")
+	})
+
+	t.Run("invalid resolver tier is usage error", func(t *testing.T) {
+		dir := fixtureDir(t)
+		stdout, stderr, code := executeRoot(t, "audit", dir, "--resolve-deps", "typo", "--deps=false")
+		assert.Equal(t, 2, code)
+		assert.Empty(t, stdout)
+		assert.Contains(t, stderr, `unknown dependency resolver tier "typo"`)
+	})
+
 	t.Run("resolve dependency error aborts audit", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, ".license-tool.yaml", configYAML)
@@ -268,6 +377,51 @@ func TestCheckCommand(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+	t.Run("fail-on flag overrides check policy", func(t *testing.T) {
+		dir := fixtureDir(t)
+		out, err := runRoot(t, "check", dir, "--fail-on", "unresolved-dependency", "--deps=false")
+		require.NoError(t, err)
+		assert.Contains(t, out, "result: PASS")
+	})
+
+	t.Run("json output file", func(t *testing.T) {
+		dir := fixtureDir(t)
+		outPath := filepath.Join(dir, "check.json")
+		out, err := runRoot(t, "check", dir, "--format", "json", "--output", outPath, "--fail-on", "unresolved-dependency", "--deps=false")
+		require.NoError(t, err)
+		assert.Empty(t, out)
+
+		data, rerr := os.ReadFile(outPath)
+		require.NoError(t, rerr)
+		assert.Contains(t, string(data), `"schema": "license-tool/report/v1"`)
+		assert.Contains(t, string(data), `"passed": true`)
+	})
+
+	t.Run("invalid fail-on flag is usage error", func(t *testing.T) {
+		dir := fixtureDir(t)
+		stdout, stderr, code := executeRoot(t, "check", dir, "--fail-on", "bogus", "--deps=false")
+		assert.Equal(t, 2, code)
+		assert.Empty(t, stdout)
+		assert.Contains(t, stderr, `unknown fail-on condition "bogus"`)
+	})
+
+	t.Run("output file create error is internal error", func(t *testing.T) {
+		dir := fixtureDir(t)
+		outPath := filepath.Join(dir, "missing", "check.json")
+		stdout, stderr, code := executeRoot(t, "check", dir, "--output", outPath, "--fail-on", "unresolved-dependency", "--deps=false")
+		assert.Equal(t, 4, code)
+		assert.Empty(t, stdout)
+		assert.Contains(t, stderr, "create output")
+	})
+
+	t.Run("invalid resolver tier is usage error", func(t *testing.T) {
+		dir := fixtureDir(t)
+		stdout, stderr, code := executeRoot(t, "check", dir, "--resolve-deps", "typo", "--fail-on", "unresolved-dependency", "--deps=false")
+		assert.Equal(t, 2, code)
+		assert.Empty(t, stdout)
+		assert.Contains(t, stderr, `unknown dependency resolver tier "typo"`)
+	})
+
 	t.Run("config resolve error", func(t *testing.T) {
 		dir := fixtureDir(t)
 		_, err := runRoot(t, "check", dir, "--config", filepath.Join(dir, "missing.yaml"))
@@ -308,12 +462,11 @@ func TestCheckCommand(t *testing.T) {
 func TestCheckFailingExits(t *testing.T) {
 	if os.Getenv("LICENSE_TOOL_CHECK_EXIT_CHILD") == "1" {
 		// Child: a headerless tree under the default fail_on fails the policy gate,
-		// so check calls os.Exit(1).
+		// so the top-level executor should exit 1 after rendering the report.
 		dir := os.Getenv("LICENSE_TOOL_CHECK_EXIT_DIR")
 		root := newRootCmd(testBuildInfo)
 		root.SetArgs([]string{"check", dir, "--deps=false"})
-		_ = root.Execute()
-		return
+		os.Exit(execute(root))
 	}
 
 	isolateEnv(t)
@@ -335,6 +488,8 @@ func TestCheckFailingExits(t *testing.T) {
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr, "child should exit non-zero; output:\n%s", out)
 	assert.Equal(t, 1, exitErr.ExitCode(), "check failure exits with code 1")
+	assert.Contains(t, string(out), "license-tool audit report")
+	assert.Contains(t, string(out), "result: FAIL")
 }
 
 func TestApplyCommand(t *testing.T) {
@@ -387,6 +542,26 @@ func TestApplyCommand(t *testing.T) {
 		_, err := runRoot(t, "apply", dir, "--write")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "non-git directory without --force")
+	})
+
+	t.Run("valid but non-curated license is internal error", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "main.go", "package main\n")
+		stdout, stderr, code := executeRoot(t, "apply", dir, "--license", "Zlib", "--holder", "Acme")
+		assert.Equal(t, 4, code)
+		assert.Empty(t, stdout)
+		assert.Contains(t, stderr, `unknown license "Zlib"`)
+	})
+
+	t.Run("render error is internal error", func(t *testing.T) {
+		dir := fixtureDir(t)
+		root := newRootCmd(testBuildInfo)
+		root.SetOut(errorWriter{err: errors.New("write failed")})
+		root.SetArgs([]string{"apply", dir})
+		err := root.Execute()
+		require.Error(t, err)
+		assert.Equal(t, exitInternal, exitCode(err))
+		assert.Contains(t, err.Error(), "write failed")
 	})
 }
 
@@ -545,6 +720,36 @@ func TestAnswersToConfig(t *testing.T) {
 	})
 }
 
+func TestParseFailOnFlags(t *testing.T) {
+	got, err := parseFailOnFlags([]string{"missing-header, unknown-license", "policy-violation", "unresolved-dependency"})
+	require.NoError(t, err)
+	assert.Equal(t, []model.FailCondition{
+		model.FailOnMissingHeader,
+		model.FailOnUnknownLicense,
+		model.FailOnPolicyViolation,
+		model.FailOnUnresolvedDependency,
+	}, got)
+
+	_, err = parseFailOnFlags([]string{"missing-header", "bogus"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown fail-on condition "bogus"`)
+}
+
+func TestRenderCommandReportErrors(t *testing.T) {
+	root := newRootCmd(testBuildInfo)
+	var out bytes.Buffer
+	root.SetOut(&out)
+
+	err := renderCommandReport(root, "", model.Report{}, report.Format(99))
+	require.Error(t, err)
+	assert.Equal(t, exitInternal, exitCode(err))
+	assert.Empty(t, out.String())
+
+	err = renderCommandReport(root, filepath.Join(t.TempDir(), "report.txt"), model.Report{}, report.Format(99))
+	require.Error(t, err)
+	assert.Equal(t, exitInternal, exitCode(err))
+}
+
 // TestInitCommandInteractiveCollectError covers the init RunE branch where the
 // interactiveCollect seam returns an error: the command must propagate it verbatim
 // and write nothing. The seam is overridden so the failure is deterministic without
@@ -647,4 +852,12 @@ func TestBuildInfoString(t *testing.T) {
 	b := buildInfo{version: "9.9.9", commit: "abc1234", date: "2026-02-03"}
 	assert.Equal(t, "license-tool 9.9.9 (commit abc1234, built 2026-02-03)", b.String())
 	assert.True(t, strings.HasPrefix(b.String(), "license-tool "))
+}
+
+type errorWriter struct {
+	err error
+}
+
+func (w errorWriter) Write([]byte) (int, error) {
+	return 0, w.err
 }

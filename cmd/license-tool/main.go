@@ -4,8 +4,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
+
+	"github.com/spf13/cobra"
 )
 
 // Build metadata, injected via -ldflags by GoReleaser (see .goreleaser.yaml).
@@ -15,15 +18,53 @@ var (
 	date    = "unknown"
 )
 
+const (
+	exitOK           = 0
+	exitCheckFailure = 1
+	exitUsage        = 2
+	exitWriteRefused = 3
+	exitInternal     = 4
+)
+
 func main() {
 	root := newRootCmd(buildInfo{version: version, commit: commit, date: date})
+	os.Exit(execute(root))
+}
+
+func execute(root *cobra.Command) int {
 	if err := root.Execute(); err != nil {
-		// Cobra has already printed the error; exit non-zero. Richer per-mode exit
-		// codes (1 check failure, 3 write refused, 4 internal) are produced inside
-		// the subcommand RunE bodies, which call os.Exit directly when they need a
-		// specific code.
-		os.Exit(2)
+		fmt.Fprintln(root.ErrOrStderr(), err)
+		return exitCode(err)
 	}
+	return exitOK
+}
+
+type commandError struct {
+	code int
+	err  error
+}
+
+func (e commandError) Error() string {
+	return e.err.Error()
+}
+
+func (e commandError) Unwrap() error {
+	return e.err
+}
+
+func withExitCode(code int, err error) error {
+	if err == nil {
+		return nil
+	}
+	return commandError{code: code, err: err}
+}
+
+func exitCode(err error) int {
+	var ce commandError
+	if errors.As(err, &ce) {
+		return ce.code
+	}
+	return exitUsage
 }
 
 // buildInfo carries the ldflags-injected version metadata into the command tree so
