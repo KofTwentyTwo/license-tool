@@ -317,3 +317,54 @@ func TestCommit(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+func TestCommitPaths(t *testing.T) {
+	requireGit(t)
+
+	t.Run("commits only named paths", func(t *testing.T) {
+		root := newRepo(t)
+		writeFile(t, root, "a.go", "package a\n")
+		writeFile(t, root, "b.go", "package b\n")
+		commitAt(t, root, "init", "2020")
+
+		writeFile(t, root, "a.go", "package a\n\nvar Changed = true\n")
+		writeFile(t, root, "b.go", "package b\n\nvar Dirty = true\n")
+		runGit(t, root, nil, "add", "b.go")
+
+		err := CommitPaths(root, "chore: scoped", []string{"a.go"})
+		require.NoError(t, err)
+
+		msg, gerr := run(root, "log", "-1", "--format=%s")
+		require.NoError(t, gerr)
+		assert.Equal(t, "chore: scoped", msg)
+
+		changed, gerr := run(root, "show", "--name-only", "--format=", "HEAD")
+		require.NoError(t, gerr)
+		assert.Equal(t, "a.go", changed)
+
+		status, gerr := run(root, "status", "--porcelain")
+		require.NoError(t, gerr)
+		assert.Contains(t, status, "b.go")
+	})
+
+	t.Run("empty pathset errors before commit", func(t *testing.T) {
+		root := newRepo(t)
+		err := CommitPaths(root, "chore: empty", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no paths to commit")
+	})
+
+	t.Run("non-repo errors on add", func(t *testing.T) {
+		err := CommitPaths(t.TempDir(), "chore: scoped", []string{"a.go"})
+		require.Error(t, err)
+	})
+
+	t.Run("nothing to commit errors after add", func(t *testing.T) {
+		root := newRepo(t)
+		writeFile(t, root, "a.go", "package a\n")
+		commitAt(t, root, "init", "2020")
+
+		err := CommitPaths(root, "chore: no-op", []string{"a.go"})
+		require.Error(t, err)
+	})
+}

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/hexops/gotextdiff"
@@ -32,10 +33,14 @@ import (
 type Options struct {
 	// Write applies changes; when false the run is a dry-run producing diffs only.
 	Write bool
+	// Includes restricts source-file processing to matching globs.
+	Includes []string
 	// AllowDirty permits writing to a dirty git working tree (--allow-dirty).
 	AllowDirty bool
 	// Force permits writing in a non-git directory (--force).
 	Force bool
+	// NoGitignore disables .gitignore inheritance on the non-git walk path.
+	NoGitignore bool
 	// Commit makes one atomic conventional commit per repo after a successful write.
 	Commit bool
 	// CommitMessage is the commit message template (--commit-message); empty = default.
@@ -92,8 +97,10 @@ func Apply(path string, cfg model.Config, opts Options) (model.Report, error) {
 	}
 
 	entries, err := enumerate.Enumerate(path, enumerate.Options{
-		Excludes: cfg.Excludes,
-		Force:    opts.Force,
+		Includes:    opts.Includes,
+		Excludes:    cfg.Excludes,
+		NoGitignore: opts.NoGitignore,
+		Force:       opts.Force,
 	}, config.LookupFunc(cfg))
 	if err != nil {
 		return model.Report{}, err
@@ -124,7 +131,9 @@ func Apply(path string, cfg model.Config, opts Options) (model.Report, error) {
 			continue
 		}
 		fr.Action = action
-		fr.Diff = diff
+		if !opts.Write {
+			fr.Diff = diff
+		}
 		if opts.Write && action != "none" && action != "skip" {
 			if werr := AtomicWrite(e.AbsPath, newContent); werr != nil {
 				fr.Err = werr.Error()
@@ -142,16 +151,34 @@ func Apply(path string, cfg model.Config, opts Options) (model.Report, error) {
 	}
 
 	if opts.Write && opts.Commit {
-		msg := opts.CommitMessage
-		if msg == "" {
-			msg = fmt.Sprintf("chore: standardize license headers to %s", cfg.License)
-		}
-		if cerr := gitutil.Commit(path, msg); cerr != nil {
+		if cerr := commitChangedFiles(path, cfg, opts, files, "chore: standardize license headers to %s"); cerr != nil {
 			return model.Report{}, cerr
 		}
 	}
 
 	return report.Build(path, cfg, files, nil, nil), nil
+}
+
+// License manages only the top-level LICENSE files with the same write gate and
+// scoped commit semantics as Apply.
+func License(path string, cfg model.Config, opts Options) ([]model.FileResult, error) {
+	if opts.Write {
+		if err := gateWrite(path, opts); err != nil {
+			return nil, err
+		}
+	}
+
+	files, err := ManageLicenseFiles(path, cfg, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	if opts.Write && opts.Commit {
+		if err := commitChangedFiles(path, cfg, opts, files, "chore: standardize license files to %s"); err != nil {
+			return nil, err
+		}
+	}
+	return files, nil
 }
 
 // ApplyFile renders and computes the new content for a single file in memory,
@@ -225,6 +252,9 @@ func writeManaged(root, rel string, want []byte, opts Options) model.FileResult 
 		fr.Action = "insert"
 	}
 	fr.Diff = unifiedDiff(rel, existing, want)
+	if opts.Write {
+		fr.Diff = ""
+	}
 
 	if opts.Write {
 		if mkerr := os.MkdirAll(filepath.Dir(abs), 0o755); mkerr != nil {
@@ -276,6 +306,31 @@ func AtomicWrite(path string, content []byte) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+func commitChangedFiles(path string, cfg model.Config, opts Options, files []model.FileResult, defaultMessage string) error {
+	msg := opts.CommitMessage
+	if msg == "" {
+		msg = fmt.Sprintf(defaultMessage, cfg.License)
+	}
+	return gitutil.CommitPaths(path, msg, changedPaths(files))
+}
+
+func changedPaths(files []model.FileResult) []string {
+	seen := map[string]bool{}
+	paths := make([]string, 0, len(files))
+	for _, fr := range files {
+		if fr.Err != "" || fr.Action == "none" || fr.Action == "skip" || fr.Action == "" {
+			continue
+		}
+		if seen[fr.Path] {
+			continue
+		}
+		seen[fr.Path] = true
+		paths = append(paths, fr.Path)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // gateWrite enforces the write-safety policy: in a git repo, refuse a dirty tree

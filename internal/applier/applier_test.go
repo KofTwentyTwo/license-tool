@@ -827,3 +827,71 @@ func TestApplyManageLicenseFilesError(t *testing.T) {
 	_, err := Apply(root, agplConfig(), Options{Write: false, ManageLicenseFile: true})
 	require.ErrorIs(t, err, boom)
 }
+
+func TestLicenseWorkflow(t *testing.T) {
+	t.Run("dry-run returns managed diffs without writing", func(t *testing.T) {
+		root := t.TempDir()
+		files, err := License(root, agplConfig(), Options{})
+		require.NoError(t, err)
+		assert.NotEmpty(t, findResult(t, files, "LICENSE").Diff)
+		_, statErr := os.Stat(filepath.Join(root, "LICENSE"))
+		assert.True(t, os.IsNotExist(statErr))
+	})
+
+	t.Run("write gate error is surfaced", func(t *testing.T) {
+		_, err := License(t.TempDir(), agplConfig(), Options{Write: true})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "non-git directory")
+	})
+
+	t.Run("manage error is surfaced", func(t *testing.T) {
+		cfg := agplConfig()
+		cfg.License = "NOPE-1.0"
+		_, err := License(t.TempDir(), cfg, Options{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown license")
+	})
+
+	t.Run("write commit succeeds with custom message", func(t *testing.T) {
+		root := t.TempDir()
+		gitInit(t, root)
+		writeFile(t, root, "main.go", "package main\n")
+		gitAddCommit(t, root)
+
+		_, err := License(root, agplConfig(), Options{
+			Write:         true,
+			Commit:        true,
+			CommitMessage: "chore: add license files",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "chore: add license files", gitHeadSubject(t, root))
+	})
+
+	t.Run("write commit with no changes errors", func(t *testing.T) {
+		root := t.TempDir()
+		gitInit(t, root)
+		writeFile(t, root, "main.go", "package main\n")
+		gitAddCommit(t, root)
+
+		_, err := License(root, agplConfig(), Options{Write: true, Commit: true})
+		require.NoError(t, err)
+
+		_, err = License(root, agplConfig(), Options{Write: true, Commit: true})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no paths to commit")
+	})
+}
+
+func TestChangedPaths(t *testing.T) {
+	files := []model.FileResult{
+		{Path: "z.go", Action: "insert"},
+		{Path: "z.go", Action: "replace"},
+		{Path: "none.go", Action: "none"},
+		{Path: "skip.go", Action: "skip"},
+		{Path: "empty.go"},
+		{Path: "err.go", Action: "insert", Err: "write failed"},
+		{Path: "a.go", Action: "replace"},
+	}
+
+	assert.Equal(t, []string{"a.go", "z.go"}, changedPaths(files))
+}
