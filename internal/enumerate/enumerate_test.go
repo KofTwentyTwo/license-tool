@@ -345,6 +345,65 @@ func TestEnumerateNonGitConfigOverrides(t *testing.T) {
 	assert.Equal(t, reasonUnknownType, other.SkipReason)
 }
 
+func TestEnumerateContentDetectsExtensionlessShebang(t *testing.T) {
+	root := t.TempDir()
+
+	writeFile(t, root, "tool", "#!/usr/bin/env python3\nprint('ok')\n")
+
+	entries, err := EnumerateContent(root, Options{}, filetype.LookupContent)
+	require.NoError(t, err)
+	byPath := indexEntries(entries)
+
+	tool := byPath["tool"]
+	assert.False(t, tool.Skip)
+	assert.Equal(t, "Python", tool.FileType.Name)
+}
+
+func TestEnumerateContentSkipAndOverrideBehavior(t *testing.T) {
+	root := t.TempDir()
+
+	writeFile(t, root, "unknown-script", "#!/usr/bin/env mystery\nrun\n")
+	writeFile(t, root, "plain", "plain text\n")
+	writeFile(t, root, "package.json", "{}\n")
+	writeFile(t, root, "binary-tool", "#!/usr/bin/env python3\n\x00")
+	writeFile(t, root, "thing.myext", "#!/usr/bin/env python3\nprint('path wins')\n")
+
+	classify := filetype.MergeContent(map[string]model.FileType{
+		".myext": {
+			Name:         "MyExt",
+			Extensions:   []string{".myext"},
+			CommentStyle: model.CommentStyle{Block: false, LinePrefix: "// "},
+		},
+	})
+
+	entries, err := EnumerateContent(root, Options{}, classify)
+	require.NoError(t, err)
+	byPath := indexEntries(entries)
+
+	cases := []struct {
+		path       string
+		wantReason string
+		wantType   string
+	}{
+		{"unknown-script", reasonUnknownType, ""},
+		{"plain", reasonUnknownType, ""},
+		{"package.json", reasonUncommentable, "JSON"},
+		{"binary-tool", reasonBinary, "Python"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			e := byPath[tc.path]
+			assert.True(t, e.Skip)
+			assert.Equal(t, tc.wantReason, e.SkipReason)
+			assert.Equal(t, tc.wantType, e.FileType.Name)
+		})
+	}
+
+	custom := byPath["thing.myext"]
+	assert.False(t, custom.Skip)
+	assert.Equal(t, "MyExt", custom.FileType.Name)
+}
+
 // TestEnumerateRelativeRoot verifies a relative root is resolved to an absolute path
 // and entries carry correct relative + absolute paths.
 func TestEnumerateRelativeRoot(t *testing.T) {

@@ -100,6 +100,16 @@ func TestClassifyEntryLstatError(t *testing.T) {
 	assert.Equal(t, "ghost.go", entry.Path)
 }
 
+func TestClassifyEntryContentLstatError(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "ghost")
+
+	entry := classifyEntryContent("ghost", missing, filetype.LookupContent)
+	assert.True(t, entry.Skip)
+	assert.Equal(t, reasonUnknownType, entry.SkipReason)
+	assert.Equal(t, "ghost", entry.Path)
+}
+
 // TestClassifyEntryNonRegular covers the non-regular-file branch: a directory path
 // (which the walk path or a submodule gitlink can surface) is skipped as unknown type
 // rather than read.
@@ -109,6 +119,16 @@ func TestClassifyEntryNonRegular(t *testing.T) {
 	require.NoError(t, os.Mkdir(dir, 0o755))
 
 	entry := classifyEntry("adir", dir, filetype.Lookup)
+	assert.True(t, entry.Skip)
+	assert.Equal(t, reasonUnknownType, entry.SkipReason)
+}
+
+func TestClassifyEntryContentNonRegular(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "adir")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+
+	entry := classifyEntryContent("adir", dir, filetype.LookupContent)
 	assert.True(t, entry.Skip)
 	assert.Equal(t, reasonUnknownType, entry.SkipReason)
 }
@@ -127,6 +147,21 @@ func TestClassifyEntrySymlinkDirect(t *testing.T) {
 	require.NoError(t, os.Symlink("target.go", link))
 
 	entry := classifyEntry("link.go", link, filetype.Lookup)
+	assert.True(t, entry.Skip)
+	assert.Equal(t, reasonSymlink, entry.SkipReason)
+}
+
+func TestClassifyEntryContentSymlinkDirect(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	require.NoError(t, os.WriteFile(target, []byte("#!/usr/bin/env python3\n"), 0o644))
+	link := filepath.Join(root, "link")
+	require.NoError(t, os.Symlink("target", link))
+
+	entry := classifyEntryContent("link", link, filetype.LookupContent)
 	assert.True(t, entry.Skip)
 	assert.Equal(t, reasonSymlink, entry.SkipReason)
 }

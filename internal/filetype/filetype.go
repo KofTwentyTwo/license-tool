@@ -13,6 +13,7 @@
 package filetype
 
 import (
+	"bytes"
 	"path/filepath"
 	"strings"
 
@@ -112,6 +113,24 @@ var builtin = []model.FileType{
 		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM), after(model.PreserveShebang)},
 	},
 	{
+		Name:          "Perl",
+		Extensions:    []string{".pl", ".pm", ".t"},
+		CommentStyle:  line("# "),
+		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM), after(model.PreserveShebang)},
+	},
+	{
+		Name:          "PowerShell",
+		Extensions:    []string{".ps1", ".psm1"},
+		CommentStyle:  line("# "),
+		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM), after(model.PreserveShebang)},
+	},
+	{
+		Name:          "R",
+		Extensions:    []string{".r"},
+		CommentStyle:  line("# "),
+		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM), after(model.PreserveShebang)},
+	},
+	{
 		Name:          "Ruby",
 		Extensions:    []string{".rb"},
 		CommentStyle:  line("# "),
@@ -120,6 +139,19 @@ var builtin = []model.FileType{
 	{
 		Name:          "YAML",
 		Extensions:    []string{".yaml", ".yml"},
+		CommentStyle:  line("# "),
+		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM)},
+	},
+	{
+		Name:          "Makefile",
+		Extensions:    []string{".mk"},
+		Filenames:     []string{"Makefile", "GNUmakefile"},
+		CommentStyle:  line("# "),
+		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM)},
+	},
+	{
+		Name:          "TOML",
+		Extensions:    []string{".toml"},
 		CommentStyle:  line("# "),
 		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM)},
 	},
@@ -164,6 +196,12 @@ var builtin = []model.FileType{
 		Extensions:    []string{".lua"},
 		CommentStyle:  line("-- "),
 		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM), after(model.PreserveShebang)},
+	},
+	{
+		Name:          "Batch",
+		Extensions:    []string{".bat", ".cmd"},
+		CommentStyle:  line("REM "),
+		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM)},
 	},
 
 	// PHP: header goes after a CLI shebang (if any) and the opening <?php tag. The
@@ -221,6 +259,83 @@ func Lookup(path string) (model.FileType, bool) {
 	return model.FileType{}, false
 }
 
+// LookupContent resolves a file path and leading content to its FileType. It keeps
+// path lookup authoritative, then falls back to content only when the path misses.
+func LookupContent(path string, head []byte) (model.FileType, bool) {
+	if ft, ok := Lookup(path); ok {
+		return ft, true
+	}
+	if name, ok := shebangInterpreter(head); ok {
+		return lookupInterpreter(name, Lookup)
+	}
+	return model.FileType{}, false
+}
+
+func shebangInterpreter(head []byte) (string, bool) {
+	if !bytes.HasPrefix(head, []byte("#!")) {
+		return "", false
+	}
+	lineEnd := bytes.IndexByte(head, '\n')
+	if lineEnd < 0 {
+		lineEnd = len(head)
+	}
+	line := strings.TrimSpace(strings.TrimRight(string(head[2:lineEnd]), "\r"))
+	if line == "" {
+		return "", false
+	}
+
+	parts := strings.Fields(line)
+	name := normalizeInterpreter(parts[0])
+	if name != "env" {
+		return name, true
+	}
+	for _, part := range parts[1:] {
+		if strings.HasPrefix(part, "-") || strings.Contains(part, "=") {
+			continue
+		}
+		return normalizeInterpreter(part), true
+	}
+	return "", false
+}
+
+func normalizeInterpreter(raw string) string {
+	name := strings.ToLower(filepath.Base(strings.Trim(raw, `"'`)))
+	name = strings.TrimSuffix(name, ".exe")
+	for len(name) > 0 {
+		last := name[len(name)-1]
+		if (last < '0' || last > '9') && last != '.' {
+			break
+		}
+		name = name[:len(name)-1]
+	}
+	return name
+}
+
+func lookupInterpreter(name string, lookup func(path string) (model.FileType, bool)) (model.FileType, bool) {
+	switch name {
+	case "sh", "bash", "dash", "zsh", "ksh":
+		return lookup("script.sh")
+	case "python", "pythonw":
+		return lookup("script.py")
+	case "perl":
+		return lookup("script.pl")
+	case "pwsh", "powershell":
+		return lookup("script.ps1")
+	case "r", "rscript":
+		return lookup("script.r")
+	case "ruby":
+		return lookup("script.rb")
+	case "php":
+		return lookup("script.php")
+	case "lua":
+		return lookup("script.lua")
+	case "node", "nodejs":
+		return lookup("script.js")
+	default:
+		return model.FileType{}, false
+	}
+}
+
 // Merge returns a copy of the built-in table layered with user overrides, keyed by
 // extension (e.g. ".myext"). An override that names an existing extension replaces
 // that extension's mapping; a new extension adds coverage. The returned function
@@ -256,6 +371,21 @@ func Merge(overrides map[string]model.FileType) func(path string) (model.FileTyp
 		}
 		if ft, ok := mergedExt[ext]; ok {
 			return ft, true
+		}
+		return model.FileType{}, false
+	}
+}
+
+// MergeContent is the content-aware counterpart to Merge. The merged path lookup
+// stays authoritative; shebang fallback is used only after that lookup misses.
+func MergeContent(overrides map[string]model.FileType) func(path string, head []byte) (model.FileType, bool) {
+	lookup := Merge(overrides)
+	return func(path string, head []byte) (model.FileType, bool) {
+		if ft, ok := lookup(path); ok {
+			return ft, true
+		}
+		if name, ok := shebangInterpreter(head); ok {
+			return lookupInterpreter(name, lookup)
 		}
 		return model.FileType{}, false
 	}

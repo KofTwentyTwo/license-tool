@@ -36,11 +36,24 @@ func TestLookupTable(t *testing.T) {
 		{"script.py", "Python", true, false, false},
 		{"run.sh", "Shell", true, false, false},
 		{"run.bash", "Shell", true, false, false},
+		{"script.pl", "Perl", true, false, false},
+		{"lib.pm", "Perl", true, false, false},
+		{"unit.t", "Perl", true, false, false},
+		{"script.ps1", "PowerShell", true, false, false},
+		{"module.psm1", "PowerShell", true, false, false},
+		{"analysis.r", "R", true, false, false},
+		{"analysis.R", "R", true, false, false},
+		{"Makefile", "Makefile", true, false, false},
+		{"GNUmakefile", "Makefile", true, false, false},
+		{"rules.mk", "Makefile", true, false, false},
 		{"flake.nix", "Nix", true, false, false},
 		{"main.tf", "HCL/Terraform", true, false, false},
 		{"vars.tfvars", "HCL/Terraform", true, false, false},
+		{"Cargo.toml", "TOML", true, false, false},
 		{"config.yaml", "YAML", true, false, false},
 		{"config.yml", "YAML", true, false, false},
+		{"build.bat", "Batch", true, false, false},
+		{"build.cmd", "Batch", true, false, false},
 		{"pom.xml", "XML/HTML", true, true, false},
 		{"index.html", "XML/HTML", true, true, false},
 		{"icon.svg", "XML/HTML", true, true, false},
@@ -68,6 +81,90 @@ func TestLookupTable(t *testing.T) {
 		assert.Equalf(t, c.wantBlock, ft.CommentStyle.Block, "Lookup(%q) block", c.path)
 		assert.Equalf(t, c.wantSkip, ft.Skip, "Lookup(%q) skip", c.path)
 	}
+}
+
+func TestBatchUsesREMLineComments(t *testing.T) {
+	ft, ok := Lookup("build.bat")
+	require.True(t, ok)
+	assert.False(t, ft.CommentStyle.Block)
+	assert.Equal(t, "REM ", ft.CommentStyle.LinePrefix)
+	assert.Empty(t, ft.CommentStyle.Open)
+	assert.Empty(t, ft.CommentStyle.Close)
+}
+
+func TestLookupContentUsesPathLookupBeforeShebang(t *testing.T) {
+	ft, ok := LookupContent("script.py", []byte("#!/usr/bin/env ruby\nputs 'wrong'\n"))
+	require.True(t, ok)
+	assert.Equal(t, "Python", ft.Name)
+}
+
+func TestLookupContentDetectsExtensionlessShebangs(t *testing.T) {
+	cases := []struct {
+		name     string
+		content  string
+		wantName string
+	}{
+		{"direct perl", "#!/usr/bin/perl\nprint qq(ok)\n", "Perl"},
+		{"env python version suffix", "#!/usr/bin/env python3.11\nprint('ok')\n", "Python"},
+		{"env powershell exe", "#!/usr/bin/env pwsh.exe\nWrite-Host ok\n", "PowerShell"},
+		{"env rscript", "#!/usr/bin/env Rscript\nprint('ok')\n", "R"},
+		{"direct shell", "#!/bin/sh\necho ok\n", "Shell"},
+		{"direct node", "#!/usr/bin/node\nconsole.log('ok')\n", "JavaScript/TypeScript"},
+		{"direct ruby", "#!/usr/bin/ruby\nputs 'ok'\n", "Ruby"},
+		{"direct php", "#!/usr/bin/php\n<?php echo 'ok';\n", "PHP"},
+		{"direct lua", "#!/usr/bin/lua\nprint('ok')\n", "Lua"},
+		{"env skips options and assignments", "#!/usr/bin/env FOO=bar -S python3\nprint('ok')\n", "Python"},
+		{"final shebang line", "#!/usr/bin/perl", "Perl"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ft, ok := LookupContent("script", []byte(tc.content))
+			require.True(t, ok)
+			assert.Equal(t, tc.wantName, ft.Name)
+		})
+	}
+}
+
+func TestLookupContentSkipsUnknownShebangsAndPlainFiles(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"unknown interpreter", "#!/usr/bin/env mystery\nrun\n"},
+		{"no shebang", "echo not executable\n"},
+		{"empty shebang", "#!\n"},
+		{"env without interpreter", "#!/usr/bin/env -S FOO=bar\n"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ft, ok := LookupContent("script", []byte(tc.content))
+			assert.False(t, ok)
+			assert.Equal(t, model.FileType{}, ft)
+		})
+	}
+}
+
+func TestMergeContentLayersOverridesBeforeShebang(t *testing.T) {
+	override := model.FileType{
+		Name:         "ToolScript",
+		Extensions:   []string{".tool"},
+		CommentStyle: model.CommentStyle{Block: false, LinePrefix: "// "},
+	}
+	lookup := MergeContent(map[string]model.FileType{".tool": override})
+
+	ft, ok := lookup("run.tool", []byte("#!/usr/bin/env python3\nprint('ok')\n"))
+	require.True(t, ok)
+	assert.Equal(t, "ToolScript", ft.Name)
+
+	ft, ok = lookup("run", []byte("#!/usr/bin/env python3\nprint('ok')\n"))
+	require.True(t, ok)
+	assert.Equal(t, "Python", ft.Name)
+
+	ft, ok = lookup("run", []byte("plain text\n"))
+	assert.False(t, ok)
+	assert.Equal(t, model.FileType{}, ft)
 }
 
 func TestPreserveFirstOrdering(t *testing.T) {

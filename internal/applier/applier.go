@@ -91,10 +91,10 @@ func Apply(path string, cfg model.Config, opts Options) (model.Report, error) {
 		})
 	}
 
-	entries, err := enumerate.Enumerate(path, enumerate.Options{
+	entries, err := enumerate.EnumerateContent(path, enumerate.Options{
 		Excludes: cfg.Excludes,
 		Force:    opts.Force,
-	}, config.LookupFunc(cfg))
+	}, config.ContentLookupFunc(cfg))
 	if err != nil {
 		return model.Report{}, err
 	}
