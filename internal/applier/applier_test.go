@@ -28,7 +28,33 @@ func goFileType() model.FileType {
 		CommentStyle: model.CommentStyle{Block: true, Open: "/*", Close: "*/"},
 		PreserveFirst: []model.PreserveRule{
 			{Kind: model.PreserveBOM, Before: false},
+			{Kind: model.PreserveGoBuildConstraint, Before: false},
 			{Kind: model.PreservePackageDecl, Before: true},
+		},
+	}
+}
+
+func cssFileType() model.FileType {
+	return model.FileType{
+		Name:         "CSS",
+		Extensions:   []string{".css"},
+		CommentStyle: model.CommentStyle{Block: true, Open: "/*", Close: "*/"},
+		PreserveFirst: []model.PreserveRule{
+			{Kind: model.PreserveBOM, Before: false},
+			{Kind: model.PreserveCSSCharset, Before: false},
+		},
+	}
+}
+
+func markupFileType() model.FileType {
+	return model.FileType{
+		Name:         "XML/HTML",
+		Extensions:   []string{".html"},
+		CommentStyle: model.CommentStyle{Block: true, Open: "<!--", Close: "-->"},
+		PreserveFirst: []model.PreserveRule{
+			{Kind: model.PreserveBOM, Before: false},
+			{Kind: model.PreserveXMLDecl, Before: false},
+			{Kind: model.PreserveDoctype, Before: false},
 		},
 	}
 }
@@ -385,6 +411,49 @@ func TestApplyFile(t *testing.T) {
 		assert.Empty(t, diff2)
 		assert.Equal(t, once, twice)
 	})
+}
+
+func TestApplyFileIdempotentAfterPreserveFirstConstructs(t *testing.T) {
+	cases := []struct {
+		name    string
+		ft      model.FileType
+		content []byte
+		prefix  string
+	}{
+		{
+			name:    "go build constraint",
+			ft:      goFileType(),
+			content: []byte("//go:build linux\n\npackage x\n"),
+			prefix:  "//go:build linux\n\n",
+		},
+		{
+			name:    "css charset",
+			ft:      cssFileType(),
+			content: []byte("@charset \"UTF-8\";\nbody {}\n"),
+			prefix:  "@charset \"UTF-8\";\n",
+		},
+		{
+			name:    "doctype",
+			ft:      markupFileType(),
+			content: []byte("<!DOCTYPE html>\n<html></html>\n"),
+			prefix:  "<!DOCTYPE html>\n",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			once, _, action1, err := ApplyFile(c.content, c.ft, agplHeaderFunc(t))
+			require.NoError(t, err)
+			require.Equal(t, "insert", action1)
+			assert.True(t, strings.HasPrefix(string(once), c.prefix))
+
+			twice, diff2, action2, err := ApplyFile(once, c.ft, agplHeaderFunc(t))
+			require.NoError(t, err)
+			assert.Equal(t, "none", action2)
+			assert.Empty(t, diff2)
+			assert.Equal(t, once, twice)
+		})
+	}
 }
 
 // TestApplyFileShebangPHPIdempotent is the applier-level regression guard for the

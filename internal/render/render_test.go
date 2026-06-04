@@ -1,6 +1,7 @@
 package render
 
 import (
+	"go/build"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/KofTwentyTwo/license-tool/internal/filetype"
+	managedheader "github.com/KofTwentyTwo/license-tool/internal/header"
 	"github.com/KofTwentyTwo/license-tool/internal/model"
 	"github.com/KofTwentyTwo/license-tool/internal/spdx"
 	"github.com/stretchr/testify/assert"
@@ -91,7 +93,7 @@ func TestHeaderStylesPlaintextContent(t *testing.T) {
 				Style: model.StyleReuse, FileType: goFT,
 			},
 			mustContain: []string{
-				sentinel,
+				managedheader.Sentinel,
 				"SPDX-FileCopyrightText: 2026 Kingsrook, LLC",
 				"SPDX-License-Identifier: AGPL-3.0-or-later",
 			},
@@ -104,7 +106,7 @@ func TestHeaderStylesPlaintextContent(t *testing.T) {
 				Style: model.StyleNotice, FileType: goFT,
 			},
 			mustContain: []string{
-				sentinel,
+				managedheader.Sentinel,
 				"Copyright (c) 2026 Kingsrook, LLC",
 				"This program is free software",
 				"GNU Affero General Public License",
@@ -118,7 +120,7 @@ func TestHeaderStylesPlaintextContent(t *testing.T) {
 				Style: model.StyleReusePlusNotice, FileType: goFT,
 			},
 			mustContain: []string{
-				sentinel,
+				managedheader.Sentinel,
 				"SPDX-FileCopyrightText: 2021-2026 Kingsrook, LLC",
 				"SPDX-License-Identifier: AGPL-3.0-or-later",
 				"This program is free software",
@@ -424,6 +426,67 @@ func TestSpliceInsertAfterCodingPragma(t *testing.T) {
 	idxPragma := strings.Index(got, "coding: utf-8")
 	idxHeader := strings.Index(got, "SPDX-License-Identifier: MIT")
 	assert.Less(t, idxPragma, idxHeader, "header is placed after the coding pragma")
+}
+
+func TestSpliceInsertAfterCodingEqualsPragma(t *testing.T) {
+	ft, header := makeHeaderLF(t, "x.py")
+	content := []byte("# coding=utf-8\nprint('hi')\n")
+
+	out, action := Splice(content, ft, header, model.DetectedHeader{Present: false})
+	got := string(out)
+
+	assert.Equal(t, "insert", action)
+	assert.True(t, strings.HasPrefix(got, "# coding=utf-8\n"),
+		"coding pragma must remain before the header")
+	idxPragma := strings.Index(got, "coding=utf-8")
+	idxHeader := strings.Index(got, "SPDX-License-Identifier: MIT")
+	assert.Less(t, idxPragma, idxHeader, "header is placed after the coding pragma")
+}
+
+func TestSplicePreservesGoBuildConstraintSemantics(t *testing.T) {
+	ft, header := makeHeaderLF(t, "x.go")
+	content := []byte("//go:build linux\n\npackage foo\n")
+	require.False(t, goFileMatches(t, content, "darwin"),
+		"fixture must be excluded before the header is inserted")
+
+	out, action := Splice(content, ft, header, model.DetectedHeader{Present: false})
+	got := string(out)
+
+	assert.Equal(t, "insert", action)
+	assert.True(t, strings.HasPrefix(got, "//go:build linux\n\n"),
+		"build constraint and terminating blank line must remain before the header")
+	assert.False(t, goFileMatches(t, out, "darwin"),
+		"inserted header must not void the build constraint")
+}
+
+func TestSpliceInsertAfterCSSCharset(t *testing.T) {
+	ft, header := makeHeaderLF(t, "x.css")
+	content := []byte("@charset \"UTF-8\";\n.cafe { content: \"hello\"; }\n")
+
+	out, action := Splice(content, ft, header, model.DetectedHeader{Present: false})
+	got := string(out)
+
+	assert.Equal(t, "insert", action)
+	assert.True(t, strings.HasPrefix(got, "@charset \"UTF-8\";\n"),
+		"@charset must remain the first stylesheet bytes")
+	idxCharset := strings.Index(got, "@charset")
+	idxHeader := strings.Index(got, "SPDX-License-Identifier: MIT")
+	assert.Less(t, idxCharset, idxHeader, "header is placed after @charset")
+}
+
+func TestSpliceInsertAfterMarkupDoctype(t *testing.T) {
+	ft, header := makeHeaderLF(t, "index.html")
+	content := []byte("<!DOCTYPE html>\n<html lang=\"en\"></html>\n")
+
+	out, action := Splice(content, ft, header, model.DetectedHeader{Present: false})
+	got := string(out)
+
+	assert.Equal(t, "insert", action)
+	assert.True(t, strings.HasPrefix(got, "<!DOCTYPE html>\n"),
+		"doctype must remain the first document content")
+	idxDoctype := strings.Index(strings.ToLower(got), "<!doctype")
+	idxHeader := strings.Index(got, "SPDX-License-Identifier: MIT")
+	assert.Less(t, idxDoctype, idxHeader, "header is placed after doctype")
 }
 
 func TestSplicePreservesBOM(t *testing.T) {
@@ -743,82 +806,6 @@ func TestWrapCommentBlankLineThroughHeader(t *testing.T) {
 	}
 }
 
-// TestHasRule drives hasRule directly to cover both the match and the no-match
-// (return false) outcomes, including kind-match-but-Before-mismatch.
-func TestHasRule(t *testing.T) {
-	ftBOMAfter := model.FileType{
-		PreserveFirst: []model.PreserveRule{
-			{Kind: model.PreserveShebang, Before: false},
-			{Kind: model.PreserveBOM, Before: false},
-		},
-	}
-	ftPackageBefore := model.FileType{
-		PreserveFirst: []model.PreserveRule{
-			{Kind: model.PreservePackageDecl, Before: true},
-		},
-	}
-	cases := []struct {
-		name   string
-		ft     model.FileType
-		kind   model.PreserveKind
-		before bool
-		want   bool
-	}{
-		{"matches kind and before", ftBOMAfter, model.PreserveBOM, false, true},
-		{"kind present but before mismatches", ftBOMAfter, model.PreserveBOM, true, false},
-		{"kind absent entirely", ftPackageBefore, model.PreserveBOM, false, false},
-		{"empty rule list", model.FileType{}, model.PreserveShebang, false, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			assert.Equal(t, c.want, hasRule(c.ft, c.kind, c.before))
-		})
-	}
-}
-
-// TestPreserveBoundaryNoBOMRule covers the hasRule miss through preserveBoundary:
-// a Go file (no PreserveBOM rule) whose content begins with BOM bytes must NOT
-// advance past them via the BOM branch (the type does not preserve a BOM), so the
-// boundary stays at 0 and the header would lead the (here, BOM-prefixed) content.
-func TestPreserveBoundaryNoBOMRule(t *testing.T) {
-	ftNoBOM := model.FileType{
-		Name: "fake",
-		PreserveFirst: []model.PreserveRule{
-			{Kind: model.PreservePackageDecl, Before: true},
-		},
-	}
-	content := append([]byte{0xEF, 0xBB, 0xBF}, []byte("package main\n")...)
-	at := preserveBoundary(content, ftNoBOM)
-	assert.Equal(t, 0, at, "without a PreserveBOM rule the boundary does not skip the BOM bytes")
-}
-
-// TestAdvanceLineIfAtEOF drives advanceLineIf's pos>=len(content) guard: starting
-// at or past the end returns pos unchanged without consulting the predicate.
-func TestAdvanceLineIfAtEOF(t *testing.T) {
-	called := false
-	match := func(string) bool {
-		called = true
-		return true
-	}
-	cases := []struct {
-		name    string
-		content []byte
-		pos     int
-	}{
-		{"pos equals length", []byte("abc"), 3},
-		{"pos past length", []byte("abc"), 10},
-		{"empty content pos zero", []byte(""), 0},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			called = false
-			got := advanceLineIf(c.content, c.pos, match)
-			assert.Equal(t, c.pos, got, "EOF guard returns pos unchanged")
-			assert.False(t, called, "predicate must not be consulted past EOF")
-		})
-	}
-}
-
 func TestSpliceNeverAltersBytesOutsideHeaderRegion(t *testing.T) {
 	// Safety invariant: for an insert, the entire original content must appear
 	// verbatim and contiguously somewhere in the output (only the header is added).
@@ -831,4 +818,17 @@ func TestSpliceNeverAltersBytesOutsideHeaderRegion(t *testing.T) {
 	require.NotEqual(t, -1, pkgIdx)
 	assert.Equal(t, string(content), string(out[pkgIdx:]),
 		"all original bytes from the insertion point survive unchanged")
+}
+
+func goFileMatches(t *testing.T, content []byte, goos string) bool {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "buildtag.go"), content, 0o644))
+
+	ctxt := build.Default
+	ctxt.GOOS = goos
+	ctxt.GOARCH = "amd64"
+	matches, err := ctxt.MatchFile(dir, "buildtag.go")
+	require.NoError(t, err)
+	return matches
 }

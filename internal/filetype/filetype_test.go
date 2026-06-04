@@ -88,8 +88,25 @@ func TestPreserveFirstOrdering(t *testing.T) {
 	// XML: BOM then xml-decl.
 	xml, ok := Lookup("pom.xml")
 	require.True(t, ok)
-	require.Len(t, xml.PreserveFirst, 2)
+	require.Len(t, xml.PreserveFirst, 3)
 	assert.Equal(t, model.PreserveXMLDecl, xml.PreserveFirst[1].Kind)
+	assert.Equal(t, model.PreserveDoctype, xml.PreserveFirst[2].Kind)
+
+	// Go: BOM, then build constraints, before package.
+	goFT, ok := Lookup("main.go")
+	require.True(t, ok)
+	require.Len(t, goFT.PreserveFirst, 3)
+	assert.Equal(t, model.PreserveBOM, goFT.PreserveFirst[0].Kind)
+	assert.Equal(t, model.PreserveGoBuildConstraint, goFT.PreserveFirst[1].Kind)
+	assert.Equal(t, model.PreservePackageDecl, goFT.PreserveFirst[2].Kind)
+	assert.True(t, goFT.PreserveFirst[2].Before)
+
+	// CSS: BOM then @charset.
+	css, ok := Lookup("style.css")
+	require.True(t, ok)
+	require.Len(t, css.PreserveFirst, 2)
+	assert.Equal(t, model.PreserveBOM, css.PreserveFirst[0].Kind)
+	assert.Equal(t, model.PreserveCSSCharset, css.PreserveFirst[1].Kind)
 
 	// PHP: BOM, then shebang (CLI scripts), then php-open. The shebang precedes the
 	// <?php tag so a "#!" line stays line 1 on an executable PHP script.

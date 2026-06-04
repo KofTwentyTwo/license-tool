@@ -159,6 +159,13 @@ const (
 	// PreservePackageDecl is a package/module declaration (Go, Java, Kotlin) that
 	// the header must precede rather than follow.
 	PreservePackageDecl
+	// PreserveGoBuildConstraint is a Go "//go:build" or "// +build" constraint
+	// block that must remain in the file's leading comment group.
+	PreserveGoBuildConstraint
+	// PreserveCSSCharset is a CSS "@charset" rule that must lead the stylesheet.
+	PreserveCSSCharset
+	// PreserveDoctype is an HTML/XML "<!DOCTYPE ...>" declaration.
+	PreserveDoctype
 )
 
 // PreserveRule is a single preserve-first directive in a FileType's ordered list.
