@@ -57,6 +57,20 @@ license-tool audit --resolve-deps tool
 ```
 
 Audit output is read-only. Audit always prints a "not legal advice" disclaimer.
+Text output starts with a `findings:` summary that calls out source-file header
+coverage, license types, unknown or unrecognized license ids, copyleft licenses,
+the policy result, and dependency resolution counts when dependencies are found.
+
+```text
+findings:
+  source files: 12 (headered 10, missing 2)
+  license types: AGPL-3.0-or-later 10, none 2
+  unknown/unrecognized: 0
+  copyleft: AGPL-3.0-or-later
+  dependencies: 8 (resolved 6, unresolved 2)
+  policy: FAIL (1: policy-violation)
+```
+
 Dependency audit discovers manifests in the root and in subdirectories, while
 honoring git, `.gitignore`, configured excludes, and common vendor-heavy
 directories such as `node_modules`, `vendor`, `build`, `dist`, and `.gradle`.
@@ -100,11 +114,21 @@ license-tool license --license AGPL-3.0-or-later --holder "Kingsrook, LLC" --wri
 
 ### init
 
-Scaffold a `.license-tool.yaml` for the repo. On a TTY this prompts for missing required fields; in CI or a non-TTY it hard-errors rather than hanging.
+Scaffold a `.license-tool.yaml` for the repo. On a TTY, `init` runs a wizard with
+a filterable SPDX license picker that lists common licenses first, then prompts
+for holder, year policy, header style, and whether to manage the top-level
+`LICENSE` files. The holder prompt requires a non-empty value, and the license
+and year prompts validate against the same parsers used by the flag path.
 
 ```bash
 license-tool init
+license-tool init --license MIT --holder "Example, Inc." --year git --style reuse+notice
 ```
+
+In a non-TTY environment, `init` skips the wizard, uses only the supplied flags,
+and validates through the same gate. Missing or invalid license and holder values
+are usage errors. If `.license-tool.yaml` already exists, `init` refuses to
+overwrite it unless `--force` is passed.
 
 ### Shared flags
 
@@ -129,7 +153,7 @@ license-tool init
 
 ## Configuration
 
-Configuration is layered. Precedence, high to low: flags, the per-repo `.license-tool.yaml`, the user/global config (`$XDG_CONFIG_HOME/license-tool/config.yaml`), then built-in defaults. The committed `.license-tool.yaml` declares the repo's license identity and doubles as the `check` expectation. Missing required fields (license, holder) prompt on a TTY and hard-error in CI.
+Configuration is layered. Precedence, high to low: flags, the per-repo `.license-tool.yaml`, the user/global config (`$XDG_CONFIG_HOME/license-tool/config.yaml`), then built-in defaults. The committed `.license-tool.yaml` declares the repo's license identity and doubles as the `check` expectation. For `init`, missing required fields prompt through the wizard on a TTY; non-TTY runs skip the wizard, use flags only, and report missing or invalid values as usage errors.
 
 ```yaml
 # .license-tool.yaml (committed per repo; doubles as the check expectation)
