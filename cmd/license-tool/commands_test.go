@@ -16,6 +16,7 @@ import (
 
 	"github.com/KofTwentyTwo/license-tool/internal/config"
 	"github.com/KofTwentyTwo/license-tool/internal/enumerate"
+	"github.com/KofTwentyTwo/license-tool/internal/initwizard"
 	"github.com/KofTwentyTwo/license-tool/internal/model"
 	"github.com/KofTwentyTwo/license-tool/internal/report"
 	"github.com/KofTwentyTwo/license-tool/internal/spdx"
@@ -977,13 +978,19 @@ func TestInitCommand(t *testing.T) {
 // exercised, and they must reject identically regardless of how answers arrived.
 func TestAnswersToConfig(t *testing.T) {
 	t.Run("valid answers build a config from defaults", func(t *testing.T) {
-		cfg, err := answersToConfig(initAnswers{
-			License:           "MIT",
-			Holder:            "Acme, LLC",
-			Year:              "2021-2026",
-			Style:             "reuse",
-			ManageLicenseFile: false,
-			Excludes:          []string{"**/vendor/**"},
+		cfg, err := answersToConfig(initwizard.Answers{
+			License: initwizard.LicenseAnswer{SPDXID: "MIT"},
+			Identity: initwizard.IdentityAnswer{
+				Holder: "Acme, LLC",
+				Year:   "2021-2026",
+			},
+			HeaderStyle: initwizard.HeaderStyleAnswer{Style: "reuse"},
+			LicenseFiles: initwizard.LicenseFilesAnswer{
+				Manage: false,
+			},
+			Coverage: initwizard.CoverageAnswer{
+				Exclude: []string{"**/vendor/**"},
+			},
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "MIT", cfg.License)
@@ -999,32 +1006,46 @@ func TestAnswersToConfig(t *testing.T) {
 	t.Run("empty year and style keep the built-in defaults", func(t *testing.T) {
 		// Unset year/style answers must leave the Defaults() values untouched, so the
 		// year/style parse branches are skipped (not defaulted to a parse of "").
-		cfg, err := answersToConfig(initAnswers{License: "MIT", Holder: "Acme"})
+		cfg, err := answersToConfig(initwizard.Answers{
+			License:      initwizard.LicenseAnswer{SPDXID: "MIT"},
+			Identity:     initwizard.IdentityAnswer{Holder: "Acme"},
+			LicenseFiles: initwizard.LicenseFilesAnswer{Manage: true},
+		})
 		require.NoError(t, err)
 		assert.Equal(t, model.YearGit, cfg.Year.Kind)
 		assert.Equal(t, model.StyleReusePlusNotice, cfg.Style)
 	})
 
 	t.Run("unknown license rejected", func(t *testing.T) {
-		_, err := answersToConfig(initAnswers{License: "NOT-A-LICENSE", Holder: "Acme"})
+		_, err := answersToConfig(initwizard.Answers{
+			License:  initwizard.LicenseAnswer{SPDXID: "NOT-A-LICENSE"},
+			Identity: initwizard.IdentityAnswer{Holder: "Acme"},
+		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not a recognized SPDX license identifier")
 	})
 
 	t.Run("empty holder rejected", func(t *testing.T) {
-		_, err := answersToConfig(initAnswers{License: "MIT", Holder: ""})
+		_, err := answersToConfig(initwizard.Answers{License: initwizard.LicenseAnswer{SPDXID: "MIT"}})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "copyright holder is required")
 	})
 
 	t.Run("bad year rejected", func(t *testing.T) {
-		_, err := answersToConfig(initAnswers{License: "MIT", Holder: "Acme", Year: "not-a-year"})
+		_, err := answersToConfig(initwizard.Answers{
+			License:  initwizard.LicenseAnswer{SPDXID: "MIT"},
+			Identity: initwizard.IdentityAnswer{Holder: "Acme", Year: "not-a-year"},
+		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "year")
 	})
 
 	t.Run("bad style rejected", func(t *testing.T) {
-		_, err := answersToConfig(initAnswers{License: "MIT", Holder: "Acme", Style: "fancy"})
+		_, err := answersToConfig(initwizard.Answers{
+			License:     initwizard.LicenseAnswer{SPDXID: "MIT"},
+			Identity:    initwizard.IdentityAnswer{Holder: "Acme"},
+			HeaderStyle: initwizard.HeaderStyleAnswer{Style: "fancy"},
+		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unknown style")
 	})
@@ -1081,24 +1102,22 @@ func TestLicenseSelectOptions(t *testing.T) {
 	opts := licenseSelectOptions()
 	require.NotEmpty(t, opts, "license picker should offer renderable licenses")
 
-	values := make([]string, 0, len(opts))
-	for _, opt := range opts {
-		values = append(values, opt.Value)
-	}
-	assert.Contains(t, values, "MIT")
-	assert.NotContains(t, values, "Zlib", "picker must not offer a license the tool cannot render")
+	assert.Contains(t, opts, "MIT")
+	assert.NotContains(t, opts, "Zlib", "picker must not offer a license the tool cannot render")
 }
 
 // TestInitCommandInteractiveCollectError covers the init RunE branch where the
 // interactiveCollect seam returns an error: the command must propagate it verbatim
 // and write nothing. The seam is overridden so the failure is deterministic without
-// a real terminal (the huh wizard itself is excluded from coverage).
+// a real terminal (the Bubble Tea wizard itself is excluded from coverage).
 func TestInitCommandInteractiveCollectError(t *testing.T) {
 	isolateEnv(t)
 
 	orig := interactiveCollect
 	wantErr := errors.New("wizard aborted")
-	interactiveCollect = func(_ *initAnswers, _ bool) error { return wantErr }
+	interactiveCollect = func(_ string, a initwizard.Answers, _ bool) (initwizard.Answers, error) {
+		return a, wantErr
+	}
 	t.Cleanup(func() { interactiveCollect = orig })
 
 	dir := t.TempDir()
@@ -1108,6 +1127,65 @@ func TestInitCommandInteractiveCollectError(t *testing.T) {
 	// The collect failure must abort before any file is written.
 	_, statErr := os.Stat(filepath.Join(dir, ".license-tool.yaml"))
 	assert.True(t, os.IsNotExist(statErr), "no config should be written when collect fails")
+}
+
+func TestInitCommandConsumesCollectorAnswers(t *testing.T) {
+	isolateEnv(t)
+
+	orig := interactiveCollect
+	t.Cleanup(func() { interactiveCollect = orig })
+
+	dir := t.TempDir()
+	interactiveCollect = func(path string, initial initwizard.Answers, interactive bool) (initwizard.Answers, error) {
+		assert.Equal(t, dir, path)
+		assert.False(t, interactive)
+		assert.Equal(t, initwizard.ProjectModelAdvancedManual, initial.Project.Model)
+		assert.Equal(t, "MIT", initial.License.SPDXID)
+		assert.Equal(t, "Flag Holder", initial.Identity.Holder)
+		assert.Equal(t, "2026", initial.Identity.Year)
+		assert.Equal(t, "reuse", initial.HeaderStyle.Style)
+		assert.Equal(t, []string{"src/**"}, initial.Coverage.Include)
+		assert.Equal(t, []string{"vendor/**"}, initial.Coverage.Exclude)
+
+		return initwizard.Answers{
+			Project: initwizard.ProjectAnswer{Model: initwizard.ProjectModelPrivateInternal},
+			License: initwizard.LicenseAnswer{
+				SPDXID: "Apache-2.0",
+			},
+			Identity: initwizard.IdentityAnswer{
+				Holder: "Wizard Holder",
+				Year:   "current",
+			},
+			HeaderStyle:  initwizard.HeaderStyleAnswer{Style: "notice"},
+			LicenseFiles: initwizard.LicenseFilesAnswer{Manage: false},
+			Coverage: initwizard.CoverageAnswer{
+				Include: []string{"cmd/**"},
+				Exclude: []string{"generated/**"},
+			},
+			Review: initwizard.ReviewAnswer{Confirmed: true},
+		}, nil
+	}
+
+	out, err := runRoot(t, "init", dir,
+		"--license", "MIT",
+		"--holder", "Flag Holder",
+		"--year", "2026",
+		"--style", "reuse",
+		"--include", "src/**",
+		"--exclude", "vendor/**",
+	)
+	require.NoError(t, err)
+
+	target := filepath.Join(dir, ".license-tool.yaml")
+	assert.Contains(t, out, "wrote "+target)
+	cfg, err := config.LoadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "Apache-2.0", cfg.License)
+	assert.Equal(t, "Wizard Holder", cfg.Holder)
+	assert.Equal(t, model.YearCurrent, cfg.Year.Kind)
+	assert.Equal(t, model.StyleNotice, cfg.Style)
+	assert.False(t, cfg.ManageLicenseFile)
+	assert.Equal(t, []string{"generated/**"}, cfg.Excludes)
 }
 
 func TestSharedToFlags(t *testing.T) {

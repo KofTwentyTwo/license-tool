@@ -16,6 +16,7 @@ import (
 	"github.com/KofTwentyTwo/license-tool/internal/config"
 	"github.com/KofTwentyTwo/license-tool/internal/detect"
 	"github.com/KofTwentyTwo/license-tool/internal/enumerate"
+	"github.com/KofTwentyTwo/license-tool/internal/initwizard"
 	"github.com/KofTwentyTwo/license-tool/internal/model"
 	"github.com/KofTwentyTwo/license-tool/internal/report"
 	"github.com/KofTwentyTwo/license-tool/internal/resolve"
@@ -389,8 +390,8 @@ func bindApplyFlags(cmd *cobra.Command, f *applyFlags) {
 }
 
 // interactiveCollect is a package-level seam over collectInteractive so tests can
-// drive the init command's non-interactive flow (and inject answers) without a real
-// terminal. Production always points at the huh-backed collectInteractive.
+// inject richer wizard answers without a real terminal. Production points at the
+// Bubble Tea collector, which no-ops when interactive is false.
 var interactiveCollect = collectInteractive
 
 // answersToConfig validates and converts collected init answers into a model.Config,
@@ -400,35 +401,40 @@ var interactiveCollect = collectInteractive
 // gate that both the TTY and flag-only paths funnel through, so an invalid or
 // unrenderable license and an empty holder are rejected identically regardless of
 // how the answers arrived.
-func answersToConfig(a initAnswers) (model.Config, error) {
-	if !spdx.Validate(a.License) {
-		return model.Config{}, fmt.Errorf("init: %q is not a recognized SPDX license identifier", a.License)
+func answersToConfig(a initwizard.Answers) (model.Config, error) {
+	licenseID := strings.TrimSpace(a.License.SPDXID)
+	holder := strings.TrimSpace(a.Identity.Holder)
+	year := strings.TrimSpace(a.Identity.Year)
+	style := strings.TrimSpace(a.HeaderStyle.Style)
+
+	if !spdx.Validate(licenseID) {
+		return model.Config{}, fmt.Errorf("init: %q is not a recognized SPDX license identifier", licenseID)
 	}
-	if _, ok := spdx.Lookup(a.License); !ok {
-		return model.Config{}, fmt.Errorf("init: %q is a recognized SPDX license identifier, but license-tool cannot render it", a.License)
+	if _, ok := spdx.Lookup(licenseID); !ok {
+		return model.Config{}, fmt.Errorf("init: %q is a recognized SPDX license identifier, but license-tool cannot render it", licenseID)
 	}
-	if a.Holder == "" {
+	if holder == "" {
 		return model.Config{}, fmt.Errorf("init: copyright holder is required")
 	}
 	cfg := config.Defaults()
-	cfg.License = a.License
-	cfg.Holder = a.Holder
-	if a.Year != "" {
-		ys, err := config.ParseYearSpec(a.Year)
+	cfg.License = licenseID
+	cfg.Holder = holder
+	if year != "" {
+		ys, err := config.ParseYearSpec(year)
 		if err != nil {
 			return model.Config{}, err
 		}
 		cfg.Year = ys
 	}
-	if a.Style != "" {
-		st, err := config.ParseStyle(a.Style)
+	if style != "" {
+		st, err := config.ParseStyle(style)
 		if err != nil {
 			return model.Config{}, err
 		}
 		cfg.Style = st
 	}
-	cfg.ManageLicenseFile = a.ManageLicenseFile
-	cfg.Excludes = a.Excludes
+	cfg.ManageLicenseFile = a.LicenseFiles.Manage
+	cfg.Excludes = append([]string(nil), a.Coverage.Exclude...)
 	return cfg, nil
 }
 
@@ -441,15 +447,19 @@ func newInitCmd(shared *sharedFlags) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := argPath(args)
 			out := cmd.OutOrStdout()
-			a := initAnswers{
-				License:           f.license,
-				Holder:            f.holder,
-				Year:              f.year,
-				Style:             f.style,
-				ManageLicenseFile: true,
-				Excludes:          shared.exclude,
+			a := initwizard.Answers{
+				Project:      initwizard.ProjectAnswer{Model: initwizard.ProjectModelAdvancedManual},
+				License:      initwizard.LicenseAnswer{SPDXID: f.license},
+				Identity:     initwizard.IdentityAnswer{Holder: f.holder, Year: f.year},
+				HeaderStyle:  initwizard.HeaderStyleAnswer{Style: f.style},
+				LicenseFiles: initwizard.LicenseFilesAnswer{Manage: true},
+				Coverage: initwizard.CoverageAnswer{
+					Include: shared.include,
+					Exclude: shared.exclude,
+				},
 			}
-			if err := interactiveCollect(&a, isTTY()); err != nil {
+			a, err := interactiveCollect(path, a, isTTY())
+			if err != nil {
 				return usageError(err)
 			}
 			cfg, err := answersToConfig(a)
