@@ -26,11 +26,38 @@ Keep non-TTY `init` scriptable, but replace the interactive `huh` form with a Bu
 7. Configure file coverage: detected defaults, selected extensions, or advanced glob lists.
 8. Review generated config, preview header on an example file, and confirm write.
 
+## TUI Shape
+- Left progress rail: Project, License, Identity, Header, Files, Coverage, Review.
+- Center panel: the active controls and short implications for the current step.
+- Right preview panel: source preview by default, with tabs for source, YAML, license files, and coverage summary.
+- Footer: key hints, validation errors, and target path.
+
+The terminal event loop should stay thin. Business logic belongs under `internal/initwizard` so the 100% coverage gate can test state transitions, sample selection, preview rendering, and validation without driving a real PTY.
+
 ## Preview Requirements
 - Default panel is an example source file with the generated header applied.
 - Secondary panels show `.license-tool.yaml`, license-file behavior, and a policy/coverage summary.
 - Include examples for JavaScript/TypeScript, Python, Java, Go, C, C++, C#, PHP, Ruby, Swift, Kotlin, Rust, Shell, PowerShell, and R.
 - If none of those languages are detected, default to C.
+
+Samples should exercise preserve-first behavior when relevant: Go build tags, Python/Ruby coding pragmas, PHP open tags, shebang-bearing shell-like files, and Java/Kotlin package declarations.
+
+## Config Semantics
+- Add persisted `include` support to `.license-tool.yaml`.
+- Empty include means all eligible files.
+- Highest non-empty include layer wins: flags > repo config > user config > defaults.
+- `exclude` keeps the existing accumulating behavior.
+- Command paths should use resolved config includes; CLI `--include` remains highest precedence because it flows through config resolution.
+
+```yaml
+include:
+  - "src/**"
+exclude:
+  - "**/generated/**"
+```
+
+## Private/Internal MVP
+Private/internal is supported as a guided path, but the tool must not invent proprietary license terms. The MVP can allow a private/internal project to choose metadata-only behavior or a renderable SPDX license used internally. Deeper `LicenseRef-*` support requires explicit user-provided license text and can be deferred if it would spread across render, policy, and license-file management.
 
 ## Steps
 1. [ ] Add persisted config `include` support with TDD.
