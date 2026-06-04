@@ -54,5 +54,6 @@
 - [x] `go test ./... -race -coverpkg=./internal/...,./cmd/... -covermode=atomic -coverprofile=cover.out`
 - [x] `go run github.com/vladopajic/go-test-coverage/v2@v2.18.8 --config=.testcoverage.yml`
 - [x] `go build ./...`
+- [x] `goreleaser check`
 - [x] `gitleaks detect --source . --no-banner --redact --exit-code 1`
 - [ ] Merge passing feature branch to local `develop`.
