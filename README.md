@@ -11,7 +11,7 @@ The tool has two halves: an audit half that reports the licenses in use across d
 Homebrew releases are configured through GoReleaser:
 
 ```bash
-brew install KofTwentyTwo/tap/license-tool
+brew install --cask KofTwentyTwo/tap/license-tool
 ```
 
 From source:
@@ -204,8 +204,8 @@ Release automation is handled by GoReleaser.
 
 - Branch pushes and PRs run CI.
 - Pushes to `develop`, `release/*`, `rc/*`, and `main` also upload branch build artifacts.
-- Version tags matching `vX.Y.Z` create production GitHub Releases and publish the Homebrew formula.
+- Version tags matching `vX.Y.Z` create production GitHub Releases and publish the Homebrew cask.
 - Version tags carrying an rc or prerelease suffix create GitHub prereleases.
-- The Homebrew formula publishes to `KofTwentyTwo/homebrew-tap`, which requires the `HOMEBREW_TAP_TOKEN` repository secret.
+- The Homebrew cask publishes to `KofTwentyTwo/homebrew-tap`, which requires the `HOMEBREW_TAP_TOKEN` repository secret.
 
 See [RELEASING.md](RELEASING.md) for the full flow.

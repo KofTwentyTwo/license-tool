@@ -1,8 +1,7 @@
 # license-tool — Requirements (the contract)
 
-> Status: DRAFT for review. Produced from a `/grill-me` session on 2026-06-03.
-> This file is the agreed scope. The companion `license-tool-design.md` says how it is built.
-> Nothing here is implemented yet; repo, issue, and branch creation are deferred to your go-ahead.
+> Status: implemented baseline, retained as the product contract. Produced from a `/grill-me` session on 2026-06-03 and updated as-built on 2026-06-04.
+> The companion `license-tool-design.md` records the implementation shape.
 
 ## 1. Purpose
 
@@ -25,7 +24,7 @@ It is intentionally generic: the target license, copyright holder, year policy, 
 | 9 | Apply safety | **Dry-run + unified diff by default**; explicit `--write` to apply. **Clean git working tree required** (override `--allow-dirty`); **atomic** temp-then-rename writes; git is the undo; **opt-in `--commit`** makes one atomic conventional commit per repo. Never deletes non-header content. Non-git dirs require `--force` |
 | 10 | Configuration | **Layered YAML**. Committed per-repo `.license-tool.yaml` declares the repo's license identity and is both the apply input and the check expectation. Precedence: flags > repo config > user/global config > built-in defaults. Interactive prompt fills missing required fields on a TTY; a **hard error (no hang) in CI/non-TTY** |
 | 11 | Audit policy | **Policy-driven classification**: category-tag each license (permissive / weak-copyleft / strong-copyleft / network-copyleft / proprietary / unknown) from SPDX metadata; flag heterogeneity and a curated set of well-known hard incompatibilities; enforce a config-defined policy (allow/deny SPDX lists, required license, fail conditions). **Always prints "not legal advice."** |
-| 12 | Distribution | New **public** repo `github.com/KofTwentyTwo/license-tool`, **MIT** licensed (its own code). Productized like `notion-sql` (see §4): **GoReleaser** (not cargo-dist), gitflow branches, GitHub Actions CI + release, tagged releases with artifacts, Homebrew via `KofTwentyTwo/homebrew-tap` (`brew install KofTwentyTwo/tap/license-tool`), full community scaffolding |
+| 12 | Distribution | Public repo `github.com/KofTwentyTwo/license-tool`, **MIT** licensed (its own code). Productized like `notion-sql` (see §4): **GoReleaser** (not cargo-dist), gitflow branches, GitHub Actions CI + release, tagged releases with artifacts, Homebrew cask via `KofTwentyTwo/homebrew-tap` (`brew install --cask KofTwentyTwo/tap/license-tool`), full community scaffolding |
 | 13 | Name | `license-tool` |
 
 ## 3. Modes (from the request)
@@ -47,12 +46,12 @@ The repo must match notion-sql's productization, translated Rust to Go (GoReleas
 - Per-OS branch builds on push (macOS, Windows) uploading artifacts named `license-tool-<run_id>-<sha>-<os>`.
 
 **Release / publishing (`.github/workflows/release.yml` + `.goreleaser.yaml`)**
-- Tag matching `v[0-9]+.[0-9]+.[0-9]+*` runs GoReleaser: cross-compile mac/linux arm64+amd64 and windows amd64, archives + `checksums.txt`, GitHub Release (prerelease when the tag carries an rc/prerelease suffix), and Homebrew formula publish to `KofTwentyTwo/homebrew-tap` as `Formula/license-tool.rb`.
-- Install UX: `brew install KofTwentyTwo/tap/license-tool`.
+- Tag matching `v[0-9]+.[0-9]+.[0-9]+*` runs GoReleaser: cross-compile mac/linux arm64+amd64 and windows amd64, archives + `checksums.txt`, GitHub Release (prerelease when the tag carries an rc/prerelease suffix), and Homebrew cask publish to `KofTwentyTwo/homebrew-tap` as `Casks/license-tool.rb`.
+- Install UX: `brew install --cask KofTwentyTwo/tap/license-tool`.
 - Requires Actions secret `HOMEBREW_TAP_TOKEN` with contents-write on the tap; never hardcoded.
 
 **Governance / community files (mirror notion-sql, adapted to this domain)**
-- `README.md`, `LICENSE` (MIT), `CHANGELOG.md` (Keep a Changelog + SemVer, with `[Unreleased]`), `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md` (supported-versions table + private advisory reporting), `RELEASING.md` (gitflow + GoReleaser commands), `scripts/verify-release.sh` (pre-release gate), `.github/ISSUE_TEMPLATE/{bug_report.md,feature_request.md,config.yml}`, `.github/pull_request_template.md`, `.github/dependabot.yml` (`gomod` + `github-actions`, weekly, limit 5), `.gitignore` (Go build output, `/dist/`, env/secrets, OS/editor cruft, agent state `.serena/.claude/.codex/.agents/.cursor`, `REQUEST*.md`).
+- `README.md`, `LICENSE` (MIT), `CHANGELOG.md` (Keep a Changelog + SemVer, with `[Unreleased]`), `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md` (supported-versions table + private advisory reporting), `RELEASING.md` (gitflow + GoReleaser commands), `scripts/verify-release.sh` (pre-release gate), `.github/ISSUE_TEMPLATE/{bug_report.yml,feature_request.yml,config.yml}`, `.github/pull_request_template.md`, `.github/dependabot.yml` (`gomod` + `github-actions`, weekly, limit 5), `.gitignore` (Go build output, `/dist/`, env/secrets, OS/editor cruft, agent state `.serena/.claude/.codex/.agents/.cursor`, `REQUEST*.md`).
 
 **Divergence note:** notion-sql's `verify-release.sh` uses emoji status markers. Per your no-emoji rule, our copy will use plain `[ok]`/`[FAIL]` text unless you want a byte-for-byte emoji match.
 

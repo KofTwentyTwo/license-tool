@@ -59,20 +59,24 @@ release:
 changelog:
   use: github
 
-brews:
+homebrew_casks:
   - name: license-tool
-    # Write the formula under Formula/ (Homebrew's convention and where brew looks);
-    # the default empty directory drops it at the tap root, where brew ignores it.
-    directory: Formula
+    ids:
+      - license-tool
+    binaries:
+      - license-tool
     repository:
       owner: KofTwentyTwo
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/KofTwentyTwo/license-tool
     description: "Audit and standardize license headers and metadata across codebases"
-    license: MIT
     commit_author:
       name: github-actions[bot]
       email: 41898282+github-actions[bot]@users.noreply.github.com
-    test: |
-      system "#{bin}/license-tool", "version"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/license-tool"]
+          end

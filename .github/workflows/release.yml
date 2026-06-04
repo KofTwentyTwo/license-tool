@@ -35,5 +35,5 @@ jobs:
         env:
           # GITHUB_TOKEN publishes the GitHub Release in this repo.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # HOMEBREW_TAP_TOKEN pushes the generated formula to KofTwentyTwo/homebrew-tap.
+          # HOMEBREW_TAP_TOKEN pushes the generated cask to KofTwentyTwo/homebrew-tap.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

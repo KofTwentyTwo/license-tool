@@ -113,7 +113,7 @@ Repo `github.com/KofTwentyTwo/license-tool`, MIT, Go module `github.com/KofTwent
 | `release.yml` (dist-generated) | `release.yml` (GoReleaser action on `v*` tags) | same trigger pattern |
 | `ci.yml` (fmt/clippy/test/build) | `ci.yml` (gofmt/vet/golangci-lint/`go test -race`/build) | same branches, same per-OS artifact uploads |
 | `.tar.xz` archives | `.tar.gz` (zip on Windows) | GoReleaser default |
-| `Formula/notion-sql.rb` in tap | `Formula/license-tool.rb` (GoReleaser-generated) | same `KofTwentyTwo/homebrew-tap` |
+| Homebrew tap package | `Casks/license-tool.rb` (GoReleaser-generated) | same `KofTwentyTwo/homebrew-tap` |
 | `dependabot.yml` (cargo + actions) | `dependabot.yml` (`gomod` + actions) | |
 | `RELEASING.md` (dist commands) | `RELEASING.md` (GoReleaser commands) | gitflow identical |
 | `scripts/verify-release.sh` (cargo+dist gates, emoji) | same 6-gate shape (go+goreleaser gates, plain text) | emoji removed per rules |
@@ -151,12 +151,12 @@ archives:
     format_overrides: [{goos: windows, formats: [zip]}]
 checksum: {name_template: checksums.txt}
 release: {prerelease: auto}
-brews:
+homebrew_casks:
   - repository: {owner: KofTwentyTwo, name: homebrew-tap, token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"}
     name: license-tool
+    binaries: [license-tool]
     homepage: https://github.com/KofTwentyTwo/license-tool
     description: "Audit and standardize license headers and metadata across codebases"
-    license: MIT
 ```
 
 ### CI / release workflows
@@ -166,15 +166,15 @@ brews:
 
 ### Required GitHub setup (same as notion-sql)
 
-- `KofTwentyTwo/homebrew-tap` exists (confirmed; already holds `notion-sql` and `limen` formulas).
+- `KofTwentyTwo/homebrew-tap` exists and receives the generated cask.
 - Add Actions secret `HOMEBREW_TAP_TOKEN` (contents-write on the tap) to the `license-tool` repo.
 - Branch protection on `main` and `develop`; verify with `gh auth status` and `git ls-remote`.
 - `verify-release.sh` gates before tagging: format/vet/lint/test, `goreleaser check` and a `goreleaser release --snapshot --clean` dry run, tap repo + token existence, CHANGELOG date set, SECURITY/README content checks, clean working tree.
 
-## Post-approval sequencing (deferred until you approve this design)
+## Completed sequencing
 
-1. Create the KofTwentyTwo GitHub issue describing the tool (tracking).
-2. Create `github.com/KofTwentyTwo/license-tool`; scaffold the full notion-sql-equivalent skeleton (community files, CI/release workflows, `.goreleaser.yaml`, layout) and commit to `main`, then branch `develop` as the default working branch with protection on both.
-3. Add the `HOMEBREW_TAP_TOKEN` Actions secret.
-4. Branch `feature/GH-<n>-initial-implementation` off `develop`; implement against this design with tests; PR into `develop`.
-5. Promote `develop` to `main` and tag `v0.1.0` to validate the GoReleaser + Homebrew path end to end (`brew install KofTwentyTwo/tap/license-tool`).
+1. Created `github.com/KofTwentyTwo/license-tool` with `develop` as the working branch.
+2. Scaffolded community files, CI/release workflows, `.goreleaser.yaml`, and the Go package layout.
+3. Added GoReleaser release automation for GitHub Releases and the Homebrew cask path.
+4. Shipped the initial implementation and follow-up bugfixes through `v0.2.1`.
+5. Current install UX: `brew install --cask KofTwentyTwo/tap/license-tool`.
