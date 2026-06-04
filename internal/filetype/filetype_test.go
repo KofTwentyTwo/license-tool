@@ -21,6 +21,7 @@ func TestLookupTable(t *testing.T) {
 		{"build.gradle.kts", "Kotlin", true, true, false},
 		{"main.go", "Go", true, true, false},
 		{"App.swift", "Swift", true, true, false},
+		{"Program.cs", "C#", true, true, false},
 		{"lib.c", "C/C++", true, true, false},
 		{"lib.cpp", "C/C++", true, true, false},
 		{"lib.h", "C/C++", true, true, false},
