@@ -137,6 +137,99 @@ func TestBuildSourcePreviewUsesCSharpFileType(t *testing.T) {
 	assert.Contains(t, preview.Content, "public class Example")
 }
 
+func TestBuildSourcePreviewEdgeCases(t *testing.T) {
+	t.Run("path with no extension has no sample", func(t *testing.T) {
+		sample, ok := SampleForPath("LICENSE")
+		assert.False(t, ok)
+		assert.Equal(t, Sample{}, sample)
+	})
+
+	t.Run("unknown family has no sample", func(t *testing.T) {
+		sample, ok := sampleForFamily(LanguageFamily("Unknown"))
+		assert.False(t, ok)
+		assert.Equal(t, Sample{}, sample)
+	})
+
+	t.Run("empty sample falls back to C", func(t *testing.T) {
+		preview, err := BuildSourcePreview(SourcePreviewInput{
+			Config: model.Config{
+				License: "MIT",
+				Holder:  "Acme, Inc.",
+				Style:   model.StyleReuse,
+			},
+			ResolvedYear: "2026",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, LanguageC, preview.Language)
+		assert.Equal(t, "example.c", preview.Path)
+	})
+
+	t.Run("resolved year is required", func(t *testing.T) {
+		_, err := BuildSourcePreview(SourcePreviewInput{
+			Config: model.Config{
+				License: "MIT",
+				Holder:  "Acme, Inc.",
+				Style:   model.StyleReuse,
+			},
+			Sample: SelectSample([]string{"main.go"}),
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "resolved year is required")
+	})
+
+	t.Run("unknown license is rejected", func(t *testing.T) {
+		_, err := BuildSourcePreview(SourcePreviewInput{
+			Config: model.Config{
+				License: "Nope",
+				Holder:  "Acme, Inc.",
+				Style:   model.StyleReuse,
+			},
+			Sample:       SelectSample([]string{"main.go"}),
+			ResolvedYear: "2026",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `unknown license "Nope"`)
+	})
+
+	t.Run("sample path must have a file type", func(t *testing.T) {
+		_, err := BuildSourcePreview(SourcePreviewInput{
+			Config: model.Config{
+				License: "MIT",
+				Holder:  "Acme, Inc.",
+				Style:   model.StyleReuse,
+			},
+			Sample: Sample{
+				Language: LanguageFamily("Unknown"),
+				Path:     "example.unknown",
+				Source:   "content\n",
+			},
+			ResolvedYear: "2026",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no file type")
+	})
+
+	t.Run("uncommentable override rejects preview rendering", func(t *testing.T) {
+		_, err := BuildSourcePreview(SourcePreviewInput{
+			Config: model.Config{
+				License: "MIT",
+				Holder:  "Acme, Inc.",
+				Style:   model.StyleReuse,
+				FileTypeOverrides: map[string]model.FileType{
+					".c": {
+						Name: "custom-c",
+						Skip: true,
+					},
+				},
+			},
+			Sample:       SelectSample([]string{"main.c"}),
+			ResolvedYear: "2026",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "uncommentable")
+	})
+}
+
 func TestBuildYAMLPreviewDelegatesToConfigRenderFile(t *testing.T) {
 	cfg := model.Config{
 		License:           "MIT",

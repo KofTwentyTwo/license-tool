@@ -15,6 +15,7 @@ import (
 // LanguageFamily is the stable label for a source preview sample.
 type LanguageFamily string
 
+// Language family labels supported by the source preview catalog.
 const (
 	LanguageTypeScriptJavaScript LanguageFamily = "TypeScript/JavaScript"
 	LanguagePython               LanguageFamily = "Python"

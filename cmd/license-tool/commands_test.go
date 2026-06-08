@@ -989,6 +989,7 @@ func TestAnswersToConfig(t *testing.T) {
 				Manage: false,
 			},
 			Coverage: initwizard.CoverageAnswer{
+				Include: []string{"src/**"},
 				Exclude: []string{"**/vendor/**"},
 			},
 		})
@@ -1000,6 +1001,7 @@ func TestAnswersToConfig(t *testing.T) {
 		assert.Equal(t, 2026, cfg.Year.End)
 		assert.Equal(t, model.StyleReuse, cfg.Style)
 		assert.False(t, cfg.ManageLicenseFile)
+		assert.Equal(t, []string{"src/**"}, cfg.Includes)
 		assert.Equal(t, []string{"**/vendor/**"}, cfg.Excludes)
 	})
 
@@ -1185,6 +1187,7 @@ func TestInitCommandConsumesCollectorAnswers(t *testing.T) {
 	assert.Equal(t, model.YearCurrent, cfg.Year.Kind)
 	assert.Equal(t, model.StyleNotice, cfg.Style)
 	assert.False(t, cfg.ManageLicenseFile)
+	assert.Equal(t, []string{"cmd/**"}, cfg.Includes)
 	assert.Equal(t, []string{"generated/**"}, cfg.Excludes)
 }
 

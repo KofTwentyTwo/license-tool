@@ -34,12 +34,12 @@ threshold:
 #      and defense-in-depth. It is not part of the shipped binary.
 #
 #   3. cmd/license-tool/wizard.go
-#      The interactive init wizard is a thin huh-backed TUI shell: it builds the form,
-#      binds answers, and runs the terminal event loop (form.Run). Like the main()
-#      shim, it has no business logic of its own -- all validation and parsing live in
-#      answersToConfig (in commands.go) and the config/spdx packages, which ARE
-#      covered. Driving a real huh form requires an interactive PTY that an in-process
-#      unit test cannot provide, so it is excluded for the same reason as main.go.
+#      The interactive init wizard is a Bubble Tea terminal shell: it renders panels,
+#      binds answers, and runs the terminal event loop. Like the main() shim, it has
+#      no write-path validation of its own; answersToConfig, config, spdx, and
+#      internal/initwizard carry the covered behavior. Driving a real TUI requires an
+#      interactive PTY that an in-process unit test cannot provide, so it is excluded
+#      for the same reason as main.go.
 exclude:
   paths:
     - ^cmd/license-tool/main\.go$

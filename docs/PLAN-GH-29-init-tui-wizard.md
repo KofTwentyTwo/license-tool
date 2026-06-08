@@ -60,13 +60,13 @@ exclude:
 Private/internal is supported as a guided path, but the tool must not invent proprietary license terms. The MVP can allow a private/internal project to choose metadata-only behavior or a renderable SPDX license used internally. Deeper `LicenseRef-*` support requires explicit user-provided license text and can be deferred if it would spread across render, policy, and license-file management.
 
 ## Steps
-1. [ ] Add persisted config `include` support with TDD.
-2. [ ] Add init answers and preview model capable of rendering config and sample headers.
-3. [ ] Add language sample catalog and deterministic detection/fallback.
-4. [ ] Implement Bubble Tea wizard model with review flow.
-5. [ ] Wire interactive `init` to the new TUI while preserving non-TTY behavior.
-6. [ ] Update docs and issue status.
-7. [ ] Run full local quality and 100% coverage gates.
+1. [x] Add persisted config `include` support with TDD.
+2. [x] Add init answers and preview model capable of rendering config and sample headers.
+3. [x] Add language sample catalog and deterministic detection/fallback.
+4. [x] Implement Bubble Tea wizard model with review flow.
+5. [x] Wire interactive `init` to the new TUI while preserving non-TTY behavior.
+6. [x] Update docs and issue status.
+7. [x] Run full local quality and 100% coverage gates.
 
 ## Open Questions
 - How complete should the private/internal license path be in this first slice if no proprietary license renderer exists yet?

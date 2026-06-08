@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `init` now opens a full-screen Bubble Tea wizard with project-model, license, identity, header-style, license-file, coverage, and review steps.
+- Added live example source previews for 15 language families, plus `.license-tool.yaml` preview and C fallback when no supported source language is detected.
+- Added persisted `include` config support and wired wizard/flag include values into audit, apply, license, and init behavior.
+
 ## [0.3.0] - 2026-06-04
 
 ### Install

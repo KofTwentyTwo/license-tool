@@ -107,21 +107,3 @@ type ReviewAnswer struct {
 	// Confirmed is true when the operator accepted the review screen.
 	Confirmed bool
 }
-
-// Preview is the narrow shell expected from the future preview engine.
-type Preview struct {
-	// Source is the rendered example source preview.
-	Source string
-	// Config is the rendered config preview.
-	Config string
-	// LicenseFiles is the license file behavior summary.
-	LicenseFiles string
-	// Coverage is the file coverage summary.
-	Coverage string
-}
-
-// PreviewProvider is intentionally narrow until the preview engine lands.
-type PreviewProvider interface {
-	// Preview returns display text for the current answers.
-	Preview(Answers) (Preview, error)
-}

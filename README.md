@@ -114,15 +114,17 @@ license-tool license --license AGPL-3.0-or-later --holder "Kingsrook, LLC" --wri
 
 ### init
 
-Scaffold a `.license-tool.yaml` for the repo. On a TTY, `init` runs a wizard with
-a filterable SPDX license picker that lists common licenses first, then prompts
-for holder, year policy, header style, and whether to manage the top-level
-`LICENSE` files. The holder prompt requires a non-empty value, and the license
-and year prompts validate against the same parsers used by the flag path.
+Scaffold a `.license-tool.yaml` for the repo. On a TTY, `init` opens a
+full-screen wizard with a progress rail, active controls, and a live preview
+panel. The preview renders the current answers onto an example source file,
+shows the YAML that will be written, summarizes license-file behavior, and shows
+include/exclude scope. The example source is chosen from supported language
+families detected in the repo, with C as the fallback.
 
 ```bash
 license-tool init
 license-tool init --license MIT --holder "Example, Inc." --year git --style reuse+notice
+license-tool init --include "src/**" --exclude "**/generated/**"
 ```
 
 In a non-TTY environment, `init` skips the wizard, uses only the supplied flags,

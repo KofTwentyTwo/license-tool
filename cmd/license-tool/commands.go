@@ -434,6 +434,7 @@ func answersToConfig(a initwizard.Answers) (model.Config, error) {
 		cfg.Style = st
 	}
 	cfg.ManageLicenseFile = a.LicenseFiles.Manage
+	cfg.Includes = append([]string(nil), a.Coverage.Include...)
 	cfg.Excludes = append([]string(nil), a.Coverage.Exclude...)
 	return cfg, nil
 }
@@ -466,7 +467,6 @@ func newInitCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return usageError(err)
 			}
-			cfg.Includes = shared.include
 			target, err := config.WriteFile(path, cfg, f.force)
 			if err != nil {
 				return writeOrInternalError(err)
