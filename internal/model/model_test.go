@@ -28,6 +28,24 @@ func TestCategoryString(t *testing.T) {
 	}
 }
 
+func TestCategoryRisk(t *testing.T) {
+	tests := []struct {
+		category Category
+		want     string
+	}{
+		{CategoryStrongCopyleft, "high"},
+		{CategoryNetworkCopyleft, "high"},
+		{CategoryProprietary, "high"},
+		{CategoryWeakCopyleft, "medium"},
+		{CategoryPermissive, "low"},
+		{CategoryUnknown, "unknown"},
+		{Category(99), "unknown"},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, tt.category.Risk())
+	}
+}
+
 func TestHeaderStyleString(t *testing.T) {
 	tests := []struct {
 		name  string

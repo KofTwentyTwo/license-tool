@@ -68,6 +68,23 @@ func (c Category) String() string {
 	}
 }
 
+// Risk renders the obligation severity of a category as a coarse, sortable token
+// ("high"|"medium"|"low"|"unknown"), so reports and machine consumers can branch on a
+// single value instead of pattern-matching category names. Strong/network copyleft and
+// proprietary are high; weak copyleft is medium; permissive is low.
+func (c Category) Risk() string {
+	switch c {
+	case CategoryStrongCopyleft, CategoryNetworkCopyleft, CategoryProprietary:
+		return "high"
+	case CategoryWeakCopyleft:
+		return "medium"
+	case CategoryPermissive:
+		return "low"
+	default:
+		return "unknown"
+	}
+}
+
 // HeaderStyle selects which parts of the canonical header are emitted into a file.
 type HeaderStyle int
 
@@ -383,6 +400,25 @@ type Report struct {
 	FileTypeCounts map[string]int
 	// Violations lists repo-level policy violation tokens.
 	Violations []string
+	// ViolationDetails carries every policy finding (file, dependency, and repo level)
+	// with its attribution: the condition, the offending SPDX id, the file/dependency
+	// path, and a human-readable message. WHY both this and Violations: Violations is
+	// the legacy repo-level token set; ViolationDetails is the full, attributable set
+	// reports and machine consumers need to explain WHICH license/rule/file failed.
+	ViolationDetails []ViolationDetail
 	// Passed is true when no fail_on condition tripped (drives check exit code).
 	Passed bool
+}
+
+// ViolationDetail is one policy finding with its attribution, so a reader (or an LLM)
+// can see the cause, not just a token.
+type ViolationDetail struct {
+	// Condition is the fail_on category this finding belongs to.
+	Condition FailCondition
+	// SPDXID is the offending license id, if applicable.
+	SPDXID string
+	// Path is the offending file or dependency label; empty for whole-repo findings.
+	Path string
+	// Message is the human-readable explanation.
+	Message string
 }

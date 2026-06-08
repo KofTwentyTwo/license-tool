@@ -6,9 +6,62 @@ import (
 	"testing"
 
 	"github.com/KofTwentyTwo/license-tool/internal/model"
+	"github.com/KofTwentyTwo/license-tool/internal/policy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func reportWithViolations() model.Report {
+	r := optionsFixture()
+	r.ViolationDetails = []model.ViolationDetail{
+		{Condition: model.FailOnMissingHeader, Path: "src/legacy.go", Message: "src/legacy.go: no managed license header"},
+		{Condition: model.FailOnPolicyViolation, SPDXID: "AGPL-3.0-or-later", Path: "web/c.ts", Message: `web/c.ts: license "AGPL-3.0-or-later" is not on the allow list`},
+	}
+	return r
+}
+
+func TestToViolationDetailsSortsDedupesAndHandlesEmpty(t *testing.T) {
+	assert.Empty(t, toViolationDetails(nil))
+
+	got := toViolationDetails([]policy.Violation{
+		{Condition: model.FailOnPolicyViolation, SPDXID: "MIT", Path: "b", Message: "m"},
+		{Condition: model.FailOnMissingHeader, Path: "a", Message: "m2"},
+		{Condition: model.FailOnMissingHeader, Path: "a", Message: "m1"}, // same cond+path, diff msg
+		{Condition: model.FailOnMissingHeader, Path: "a", Message: "m1"}, // exact duplicate
+	})
+	require.Len(t, got, 3) // duplicate collapsed
+	// missing-header (0) sorts before policy-violation (2); within, by path then message.
+	assert.Equal(t, model.FailOnMissingHeader, got[0].Condition)
+	assert.Equal(t, "m1", got[0].Message)
+	assert.Equal(t, "m2", got[1].Message)
+	assert.Equal(t, model.FailOnPolicyViolation, got[2].Condition)
+}
+
+func TestRenderTextViolationDetails(t *testing.T) {
+	out := renderToString(t, reportWithViolations(), FormatText, RenderOptions{})
+	assert.Contains(t, out, "policy violations:")
+	assert.Contains(t, out, "[missing-header] src/legacy.go: no managed license header")
+	assert.Contains(t, out, `[policy-violation] web/c.ts: license "AGPL-3.0-or-later" is not on the allow list`)
+}
+
+func TestRenderMarkdownViolationDetails(t *testing.T) {
+	out := renderToString(t, reportWithViolations(), FormatMarkdown, RenderOptions{})
+	assert.Contains(t, out, "## Policy violations")
+	assert.Contains(t, out, "| Condition | License | Location | Detail |")
+	assert.Contains(t, out, "| policy-violation | `AGPL-3.0-or-later` | web/c.ts |")
+}
+
+func TestRenderJSONViolationDetails(t *testing.T) {
+	out := renderToString(t, reportWithViolations(), FormatJSON, RenderOptions{})
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &raw))
+	vd, ok := raw["violationDetails"].([]any)
+	require.True(t, ok)
+	require.Len(t, vd, 2)
+	first := vd[0].(map[string]any)
+	assert.Equal(t, "missing-header", first["condition"])
+	assert.Contains(t, first, "message")
+}
 
 // optionsFixture builds a realistic report (counts populated by Build) with headered,
 // headerless, and skipped source files plus resolved/unresolved dependencies.

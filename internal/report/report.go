@@ -285,6 +285,7 @@ func Audit(path string, cfg model.Config, opts Options, pipe Pipeline) (model.Re
 	}
 
 	files := make([]model.FileResult, 0, len(sources))
+	var allViolations []policy.Violation
 	for _, s := range sources {
 		fr := model.FileResult{
 			Path:     s.Path,
@@ -309,12 +310,15 @@ func Audit(path string, cfg model.Config, opts Options, pipe Pipeline) (model.Re
 		}
 
 		// Per-file policy verdicts attach their stable tokens to the file so the
-		// by-file view and the fail-on evaluation both see them.
-		for _, v := range policy.EvaluateFile(cfg.Policy, fr) {
+		// by-file view and the fail-on evaluation both see them; the full structs are
+		// retained for the attributable ViolationDetails.
+		fileViolations := policy.EvaluateFile(cfg.Policy, fr)
+		for _, v := range fileViolations {
 			fr.Violations = append(fr.Violations, v.Token())
 		}
 		sort.Strings(fr.Violations)
 		fr.Violations = dedupeStrings(fr.Violations)
+		allViolations = append(allViolations, fileViolations...)
 
 		files = append(files, fr)
 	}
@@ -335,8 +339,53 @@ func Audit(path string, cfg model.Config, opts Options, pipe Pipeline) (model.Re
 
 	// Repo-level checks run over the distinct SPDX ids actually found in source.
 	repoViolations = append(repoViolations, policy.EvaluateRepo(cfg.Policy, distinctSourceIDs(files))...)
+	allViolations = append(allViolations, repoViolations...)
 
-	return Build(path, cfg, files, deps, repoViolations), nil
+	r := Build(path, cfg, files, deps, repoViolations)
+	r.ViolationDetails = toViolationDetails(allViolations)
+	return r, nil
+}
+
+// toViolationDetails maps the full policy.Violation set (file + dependency + repo) to
+// attributable model.ViolationDetail records, sorted and de-duplicated for stable
+// output. WHY the report layer owns this mapping: model stays free of a policy import,
+// and the rich attribution policy already produces is preserved instead of being
+// flattened to bare tokens.
+func toViolationDetails(vs []policy.Violation) []model.ViolationDetail {
+	out := make([]model.ViolationDetail, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, model.ViolationDetail{
+			Condition: v.Condition,
+			SPDXID:    v.SPDXID,
+			Path:      v.Path,
+			Message:   v.Message,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Condition != out[j].Condition {
+			return out[i].Condition < out[j].Condition
+		}
+		if out[i].Path != out[j].Path {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].Message < out[j].Message
+	})
+	return dedupeViolationDetails(out)
+}
+
+// dedupeViolationDetails removes adjacent duplicate findings; the input is pre-sorted,
+// so a single linear pass suffices.
+func dedupeViolationDetails(in []model.ViolationDetail) []model.ViolationDetail {
+	if len(in) == 0 {
+		return nil
+	}
+	out := in[:1]
+	for _, v := range in[1:] {
+		if v != out[len(out)-1] {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // distinctSourceIDs returns the sorted, unique set of SPDX ids detected across the
@@ -472,6 +521,22 @@ func renderText(w io.Writer, r model.Report, opts RenderOptions) error {
 		bw.printf("\n")
 	}
 
+	renderTextViolations(bw, r)
+
+	return bw.err
+}
+
+// renderTextViolations prints the attributable findings (condition + message) when
+// available, falling back to the legacy repo-level tokens otherwise.
+func renderTextViolations(bw *errWriter, r model.Report) {
+	if len(r.ViolationDetails) > 0 {
+		bw.printf("policy violations:\n")
+		for _, v := range r.ViolationDetails {
+			bw.printf("  [%s] %s\n", v.Condition, v.Message)
+		}
+		bw.printf("\n")
+		return
+	}
 	if len(r.Violations) > 0 {
 		bw.printf("policy violations:\n")
 		for _, v := range r.Violations {
@@ -479,8 +544,6 @@ func renderText(w io.Writer, r model.Report, opts RenderOptions) error {
 		}
 		bw.printf("\n")
 	}
-
-	return bw.err
 }
 
 // renderCountSection prints a "<title>:" header followed by the sorted counts, or
@@ -617,6 +680,23 @@ func renderMarkdown(w io.Writer, r model.Report, opts RenderOptions) error {
 		bw.printf("\n")
 	}
 
+	renderMarkdownViolations(bw, r)
+
+	return bw.err
+}
+
+// renderMarkdownViolations renders an attributable findings table (condition, license,
+// location, detail) when details are present, falling back to the legacy token list.
+func renderMarkdownViolations(bw *errWriter, r model.Report) {
+	if len(r.ViolationDetails) > 0 {
+		bw.printf("## Policy violations\n\n")
+		bw.printf("| Condition | License | Location | Detail |\n| --- | --- | --- | --- |\n")
+		for _, v := range r.ViolationDetails {
+			bw.printf("| %s | `%s` | %s | %s |\n", v.Condition, orNone(v.SPDXID), orNone(v.Path), v.Message)
+		}
+		bw.printf("\n")
+		return
+	}
 	if len(r.Violations) > 0 {
 		bw.printf("## Policy violations\n\n")
 		for _, v := range r.Violations {
@@ -624,8 +704,6 @@ func renderMarkdown(w io.Writer, r model.Report, opts RenderOptions) error {
 		}
 		bw.printf("\n")
 	}
-
-	return bw.err
 }
 
 // renderMarkdownGroups renders the grouped source-file view. Under --summary it emits
@@ -685,34 +763,44 @@ func mdFileStatus(fr model.FileResult) string {
 // decouples wire compatibility from internal refactors, and lets us emit the
 // disclaimer, a schema version, and sorted aggregates explicitly.
 type jsonReport struct {
-	Schema         string           `json:"schema"`
-	Disclaimer     string           `json:"disclaimer"`
-	Root           string           `json:"root"`
-	Passed         bool             `json:"passed"`
-	Config         jsonConfig       `json:"config"`
-	LicenseCounts  map[string]int   `json:"licenseCounts"`
-	CategoryCounts map[string]int   `json:"categoryCounts"`
-	FileTypeCounts map[string]int   `json:"fileTypeCounts"`
-	Groups         []jsonGroup      `json:"groups,omitempty"`
-	Files          []jsonFile       `json:"files"`
-	Dependencies   []jsonDependency `json:"dependencies"`
-	Violations     []string         `json:"violations"`
+	Schema           string           `json:"schema"`
+	Disclaimer       string           `json:"disclaimer"`
+	Root             string           `json:"root"`
+	Passed           bool             `json:"passed"`
+	Config           jsonConfig       `json:"config"`
+	LicenseCounts    map[string]int   `json:"licenseCounts"`
+	CategoryCounts   map[string]int   `json:"categoryCounts"`
+	FileTypeCounts   map[string]int   `json:"fileTypeCounts"`
+	Groups           []jsonGroup      `json:"groups,omitempty"`
+	Files            []jsonFile       `json:"files"`
+	Dependencies     []jsonDependency `json:"dependencies"`
+	Violations       []string         `json:"violations"`
+	ViolationDetails []jsonViolation  `json:"violationDetails"`
+}
+
+// jsonViolation is one attributable finding in the machine schema.
+type jsonViolation struct {
+	Condition string `json:"condition"`
+	SPDXID    string `json:"spdxId,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Message   string `json:"message"`
 }
 
 // jsonSummaryReport is the trimmed schema emitted under --summary: counts, optional
 // groups, and violations, but no per-file or per-dependency detail. A dedicated
 // struct keeps the default (full) jsonReport byte-identical to its historical shape.
 type jsonSummaryReport struct {
-	Schema         string         `json:"schema"`
-	Disclaimer     string         `json:"disclaimer"`
-	Root           string         `json:"root"`
-	Passed         bool           `json:"passed"`
-	Config         jsonConfig     `json:"config"`
-	LicenseCounts  map[string]int `json:"licenseCounts"`
-	CategoryCounts map[string]int `json:"categoryCounts"`
-	FileTypeCounts map[string]int `json:"fileTypeCounts"`
-	Groups         []jsonGroup    `json:"groups,omitempty"`
-	Violations     []string       `json:"violations"`
+	Schema           string          `json:"schema"`
+	Disclaimer       string          `json:"disclaimer"`
+	Root             string          `json:"root"`
+	Passed           bool            `json:"passed"`
+	Config           jsonConfig      `json:"config"`
+	LicenseCounts    map[string]int  `json:"licenseCounts"`
+	CategoryCounts   map[string]int  `json:"categoryCounts"`
+	FileTypeCounts   map[string]int  `json:"fileTypeCounts"`
+	Groups           []jsonGroup     `json:"groups,omitempty"`
+	Violations       []string        `json:"violations"`
+	ViolationDetails []jsonViolation `json:"violationDetails"`
 }
 
 // jsonGroup is one grouped bucket in the machine schema. Files is omitted under
@@ -763,33 +851,36 @@ func renderJSON(w io.Writer, r model.Report, opts RenderOptions) error {
 	if opts.GroupBy != GroupNone {
 		groups = buildJSONGroups(r, opts)
 	}
+	details := toJSONViolations(r.ViolationDetails)
 
 	if opts.Summary {
 		return enc.Encode(jsonSummaryReport{
-			Schema:         "license-tool/report/v1",
-			Disclaimer:     Disclaimer,
-			Root:           r.Root,
-			Passed:         r.Passed,
-			Config:         jsonConfig{License: r.Config.License, Holder: r.Config.Holder, Style: r.Config.Style.String()},
-			LicenseCounts:  nonNilCounts(r.LicenseCounts),
-			CategoryCounts: nonNilCounts(r.CategoryCounts),
-			FileTypeCounts: nonNilCounts(r.FileTypeCounts),
-			Groups:         groups,
-			Violations:     nonNilStrings(r.Violations),
+			Schema:           "license-tool/report/v1",
+			Disclaimer:       Disclaimer,
+			Root:             r.Root,
+			Passed:           r.Passed,
+			Config:           jsonConfig{License: r.Config.License, Holder: r.Config.Holder, Style: r.Config.Style.String()},
+			LicenseCounts:    nonNilCounts(r.LicenseCounts),
+			CategoryCounts:   nonNilCounts(r.CategoryCounts),
+			FileTypeCounts:   nonNilCounts(r.FileTypeCounts),
+			Groups:           groups,
+			Violations:       nonNilStrings(r.Violations),
+			ViolationDetails: details,
 		})
 	}
 
 	out := jsonReport{
-		Schema:         "license-tool/report/v1",
-		Disclaimer:     Disclaimer,
-		Root:           r.Root,
-		Passed:         r.Passed,
-		Config:         jsonConfig{License: r.Config.License, Holder: r.Config.Holder, Style: r.Config.Style.String()},
-		LicenseCounts:  nonNilCounts(r.LicenseCounts),
-		CategoryCounts: nonNilCounts(r.CategoryCounts),
-		FileTypeCounts: nonNilCounts(r.FileTypeCounts),
-		Groups:         groups,
-		Violations:     nonNilStrings(r.Violations),
+		Schema:           "license-tool/report/v1",
+		Disclaimer:       Disclaimer,
+		Root:             r.Root,
+		Passed:           r.Passed,
+		Config:           jsonConfig{License: r.Config.License, Holder: r.Config.Holder, Style: r.Config.Style.String()},
+		LicenseCounts:    nonNilCounts(r.LicenseCounts),
+		CategoryCounts:   nonNilCounts(r.CategoryCounts),
+		FileTypeCounts:   nonNilCounts(r.FileTypeCounts),
+		Groups:           groups,
+		Violations:       nonNilStrings(r.Violations),
+		ViolationDetails: details,
 	}
 
 	out.Files = make([]jsonFile, 0, len(r.Files))
@@ -838,6 +929,19 @@ func toJSONFile(fr model.FileResult) jsonFile {
 		Violations: nonNilStrings(fr.Violations),
 		Error:      fr.Err,
 	}
+}
+
+func toJSONViolations(details []model.ViolationDetail) []jsonViolation {
+	out := make([]jsonViolation, 0, len(details))
+	for _, v := range details {
+		out = append(out, jsonViolation{
+			Condition: v.Condition.String(),
+			SPDXID:    v.SPDXID,
+			Path:      v.Path,
+			Message:   v.Message,
+		})
+	}
+	return out
 }
 
 func toJSONDependency(dep model.DependencyLicense) jsonDependency {
