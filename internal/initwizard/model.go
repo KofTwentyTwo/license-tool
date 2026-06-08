@@ -8,44 +8,11 @@ import "errors"
 // confirming the review step.
 var ErrAborted = errors.New("init wizard aborted")
 
-// ProjectModel describes the licensing posture the wizard is collecting for.
-type ProjectModel string
-
-const (
-	// ProjectModelOpenSource is for public source distributed under an SPDX license.
-	ProjectModelOpenSource ProjectModel = "open-source"
-	// ProjectModelPrivateInternal is for private source with internal policy needs.
-	ProjectModelPrivateInternal ProjectModel = "private-internal"
-	// ProjectModelExistingProject is for an existing repo where current files guide defaults.
-	ProjectModelExistingProject ProjectModel = "existing-project"
-	// ProjectModelAdvancedManual is for explicit flag or manual wizard choices.
-	ProjectModelAdvancedManual ProjectModel = "advanced-manual"
-)
-
-// Step is the high-level screen/state currently active in the collector.
-type Step int
-
-const (
-	// StepProjectModel collects the project licensing model.
-	StepProjectModel Step = iota
-	// StepLicense collects the SPDX or future private license choice.
-	StepLicense
-	// StepIdentity collects holder and year policy values.
-	StepIdentity
-	// StepHeaderStyle collects the source header style.
-	StepHeaderStyle
-	// StepLicenseFiles collects top-level license file management intent.
-	StepLicenseFiles
-	// StepCoverage collects include and exclude coverage choices.
-	StepCoverage
-	// StepReview presents the final review before writing config.
-	StepReview
-)
-
-// Answers is the structured payload returned by the interactive collector.
+// Answers is the structured payload the init form edits and returns. WHY no project
+// model or review step: the redesign detects defaults from the repo (see Seed) rather
+// than asking a project-model question, and the single-screen form is itself the
+// review, so the former Project/Review/Step machinery was removed.
 type Answers struct {
-	// Project records the project model choice.
-	Project ProjectAnswer
 	// License records the target license choice.
 	License LicenseAnswer
 	// Identity records copyright holder and year policy.
@@ -56,22 +23,12 @@ type Answers struct {
 	LicenseFiles LicenseFilesAnswer
 	// Coverage records include and exclude file scope answers.
 	Coverage CoverageAnswer
-	// Review records the final confirmation state.
-	Review ReviewAnswer
-}
-
-// ProjectAnswer holds the project model selection.
-type ProjectAnswer struct {
-	// Model is the selected project model.
-	Model ProjectModel
 }
 
 // LicenseAnswer holds the target license selection.
 type LicenseAnswer struct {
 	// SPDXID is the SPDX identifier selected for generated config.
 	SPDXID string
-	// Private marks a future private/internal license path without SPDX rendering.
-	Private bool
 }
 
 // IdentityAnswer holds copyright identity answers.
@@ -100,10 +57,4 @@ type CoverageAnswer struct {
 	Include []string
 	// Exclude is the selected exclude glob list.
 	Exclude []string
-}
-
-// ReviewAnswer records whether the final review was confirmed.
-type ReviewAnswer struct {
-	// Confirmed is true when the operator accepted the review screen.
-	Confirmed bool
 }

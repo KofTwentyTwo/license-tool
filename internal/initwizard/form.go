@@ -13,13 +13,21 @@ import (
 type Field int
 
 const (
+	// FieldLicense is the target SPDX license row.
 	FieldLicense Field = iota
+	// FieldHolder is the copyright holder row.
 	FieldHolder
+	// FieldYear is the year-policy row.
 	FieldYear
+	// FieldStyle is the header-style row.
 	FieldStyle
+	// FieldManageFiles is the manage-license-files toggle row.
 	FieldManageFiles
+	// FieldInclude is the include-globs list row.
 	FieldInclude
+	// FieldExclude is the exclude-globs list row.
 	FieldExclude
+	// FieldWrite is the trailing write-config action row.
 	FieldWrite
 )
 

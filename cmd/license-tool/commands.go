@@ -404,7 +404,6 @@ func newInitCmd(shared *sharedFlags) *cobra.Command {
 			path := argPath(args)
 			out := cmd.OutOrStdout()
 			a := initwizard.Answers{
-				Project:      initwizard.ProjectAnswer{Model: initwizard.ProjectModelAdvancedManual},
 				License:      initwizard.LicenseAnswer{SPDXID: f.license},
 				Identity:     initwizard.IdentityAnswer{Holder: f.holder, Year: f.year},
 				HeaderStyle:  initwizard.HeaderStyleAnswer{Style: f.style},

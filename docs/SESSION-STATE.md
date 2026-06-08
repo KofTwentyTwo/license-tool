@@ -4,15 +4,12 @@
 `feature/GH-29-init-tui-wizard`
 
 ## Current Objective
-Implement GitHub issue #29: redesign `license-tool init` as a full-screen configuration TUI with live example source preview, persisted include/exclude defaults, and 100% test coverage.
+Redesign `license-tool init` per `docs/DESIGN-init-tui-redesign.md`: single always-visible, repo-seeded form with an adaptive live preview; all logic in a tested `internal/initwizard`; `wizard.go` a thin Bubble Tea adapter. Plan: `docs/PLAN-GH-29-init-tui-redesign.md`.
 
 ## Status
-- `v0.3.0` is released.
-- Feature branch created from `main` at `7e177a9`.
-- Plan created in `docs/PLAN-GH-29-init-tui-wizard.md`.
-- Feature-definition and worker slices are integrated into the feature branch.
-- The init TUI now uses Bubble Tea with a progress rail, active controls, and live source/YAML preview.
-- Include patterns persist through config, CLI flags, collector answers, and written init output.
+- Full-codebase review complete: `docs/review/01-03`. Bugs filed: #30, #31, #32 (blocker for #29), #33, #34.
+- Task 1 done (commit `4e3561e`): include globs honor `**` via shared `enumerate.CompileMatcher` (#32).
+- Task 2 done (commit `bafa281`): single `initwizard.Translate` replaces `answersToConfig` + wizard `previewConfig`; tests moved to `internal/initwizard/translate_test.go`.
 
 ## Next Step
-Manual TUI review with `/private/tmp/license-tool-gh29` or `go run ./cmd/license-tool init <path>` before promoting the feature branch.
+Task 3: trim dead types (`ProjectModel*`, `Step*`, `ReviewAnswer`, `ProjectAnswer`, `LicenseAnswer.Private`) and add `initwizard.Seed(root, deps)` repo detection. Then Tasks 4-7 (form state machine, layout, view, thin adapter + full gate). NOTE: the current `wizard.go` still references the soon-to-be-removed types; Task 7 rewrites it.

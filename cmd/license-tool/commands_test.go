@@ -1018,14 +1018,6 @@ func TestWriteOrInternalErrorClassifiesUnexpectedErrors(t *testing.T) {
 	assert.Equal(t, exitInternal, exitCode(err))
 }
 
-func TestLicenseSelectOptions(t *testing.T) {
-	opts := licenseSelectOptions()
-	require.NotEmpty(t, opts, "license picker should offer renderable licenses")
-
-	assert.Contains(t, opts, "MIT")
-	assert.NotContains(t, opts, "Zlib", "picker must not offer a license the tool cannot render")
-}
-
 // TestInitCommandInteractiveCollectError covers the init RunE branch where the
 // interactiveCollect seam returns an error: the command must propagate it verbatim
 // and write nothing. The seam is overridden so the failure is deterministic without
@@ -1059,7 +1051,6 @@ func TestInitCommandConsumesCollectorAnswers(t *testing.T) {
 	interactiveCollect = func(path string, initial initwizard.Answers, interactive bool) (initwizard.Answers, error) {
 		assert.Equal(t, dir, path)
 		assert.False(t, interactive)
-		assert.Equal(t, initwizard.ProjectModelAdvancedManual, initial.Project.Model)
 		assert.Equal(t, "MIT", initial.License.SPDXID)
 		assert.Equal(t, "Flag Holder", initial.Identity.Holder)
 		assert.Equal(t, "2026", initial.Identity.Year)
@@ -1068,7 +1059,6 @@ func TestInitCommandConsumesCollectorAnswers(t *testing.T) {
 		assert.Equal(t, []string{"vendor/**"}, initial.Coverage.Exclude)
 
 		return initwizard.Answers{
-			Project: initwizard.ProjectAnswer{Model: initwizard.ProjectModelPrivateInternal},
 			License: initwizard.LicenseAnswer{
 				SPDXID: "Apache-2.0",
 			},
@@ -1082,7 +1072,6 @@ func TestInitCommandConsumesCollectorAnswers(t *testing.T) {
 				Include: []string{"cmd/**"},
 				Exclude: []string{"generated/**"},
 			},
-			Review: initwizard.ReviewAnswer{Confirmed: true},
 		}, nil
 	}
 

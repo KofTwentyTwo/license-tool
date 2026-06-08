@@ -115,11 +115,16 @@ license-tool license --license AGPL-3.0-or-later --holder "Kingsrook, LLC" --wri
 ### init
 
 Scaffold a `.license-tool.yaml` for the repo. On a TTY, `init` opens a
-full-screen wizard with a progress rail, active controls, and a live preview
-panel. The preview renders the current answers onto an example source file,
-shows the YAML that will be written, summarizes license-file behavior, and shows
-include/exclude scope. The example source is chosen from supported language
-families detected in the repo, with C as the fallback.
+single-screen form pre-filled from repo detection (existing headers, a top-level
+`LICENSE`, and the git author seed the license, holder, and manage choices, each
+badged `(detected)` and fully editable). Every field is visible and editable in
+any order; complex fields (the searchable license picker and the include/exclude
+glob lists) expand inline. A persistent live preview re-renders on every edit and
+adapts to terminal width: the example source file with the generated header, the
+YAML to be written, both side by side when wide, stacked when narrow. The example
+source is chosen from supported language families detected in the repo, with C as
+the fallback. Validation is live; the write action stays disabled until every
+field is valid. Writing over an existing `.license-tool.yaml` asks first.
 
 ```bash
 license-tool init

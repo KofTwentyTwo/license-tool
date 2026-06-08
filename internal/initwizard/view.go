@@ -172,7 +172,7 @@ func renderGlobEditor(s FormState) string {
 	for i, e := range entries {
 		b.WriteString(cursorMark(i == s.globCursor) + e + "\n")
 	}
-	fmt.Fprintf(&b, "add: %s_  (enter to add, d to remove)", s.globBuffer)
+	fmt.Fprintf(&b, "add: %s_  (enter to add, del to remove)", s.globBuffer)
 	return b.String()
 }
 
