@@ -394,51 +394,6 @@ func bindApplyFlags(cmd *cobra.Command, f *applyFlags) {
 // Bubble Tea collector, which no-ops when interactive is false.
 var interactiveCollect = collectInteractive
 
-// answersToConfig validates and converts collected init answers into a model.Config,
-// starting from the built-in Defaults so unset answers carry the documented default
-// behavior. WHY validation lives here, not in the wizard: the wizard is the
-// interactive shell (excluded from coverage); answersToConfig is the single tested
-// gate that both the TTY and flag-only paths funnel through, so an invalid or
-// unrenderable license and an empty holder are rejected identically regardless of
-// how the answers arrived.
-func answersToConfig(a initwizard.Answers) (model.Config, error) {
-	licenseID := strings.TrimSpace(a.License.SPDXID)
-	holder := strings.TrimSpace(a.Identity.Holder)
-	year := strings.TrimSpace(a.Identity.Year)
-	style := strings.TrimSpace(a.HeaderStyle.Style)
-
-	if !spdx.Validate(licenseID) {
-		return model.Config{}, fmt.Errorf("init: %q is not a recognized SPDX license identifier", licenseID)
-	}
-	if _, ok := spdx.Lookup(licenseID); !ok {
-		return model.Config{}, fmt.Errorf("init: %q is a recognized SPDX license identifier, but license-tool cannot render it", licenseID)
-	}
-	if holder == "" {
-		return model.Config{}, fmt.Errorf("init: copyright holder is required")
-	}
-	cfg := config.Defaults()
-	cfg.License = licenseID
-	cfg.Holder = holder
-	if year != "" {
-		ys, err := config.ParseYearSpec(year)
-		if err != nil {
-			return model.Config{}, err
-		}
-		cfg.Year = ys
-	}
-	if style != "" {
-		st, err := config.ParseStyle(style)
-		if err != nil {
-			return model.Config{}, err
-		}
-		cfg.Style = st
-	}
-	cfg.ManageLicenseFile = a.LicenseFiles.Manage
-	cfg.Includes = append([]string(nil), a.Coverage.Include...)
-	cfg.Excludes = append([]string(nil), a.Coverage.Exclude...)
-	return cfg, nil
-}
-
 func newInitCmd(shared *sharedFlags) *cobra.Command {
 	f := &applyFlags{}
 	cmd := &cobra.Command{
@@ -463,7 +418,7 @@ func newInitCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return usageError(err)
 			}
-			cfg, err := answersToConfig(a)
+			cfg, err := initwizard.Translate(a, initwizard.TranslateOptions{})
 			if err != nil {
 				return usageError(err)
 			}

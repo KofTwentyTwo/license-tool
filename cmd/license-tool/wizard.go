@@ -13,7 +13,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/KofTwentyTwo/license-tool/internal/config"
 	"github.com/KofTwentyTwo/license-tool/internal/initwizard"
 	"github.com/KofTwentyTwo/license-tool/internal/model"
 	"github.com/KofTwentyTwo/license-tool/internal/spdx"
@@ -499,7 +498,7 @@ func (m initWizardModel) reviewBody() string {
 }
 
 func (m initWizardModel) previewSummary() string {
-	cfg := m.previewConfig()
+	cfg, _ := initwizard.Translate(m.answers, initwizard.TranslateOptions{AllowPlaceholders: true})
 	sample := initwizard.SelectSample(m.previewPaths)
 	sourcePreview, sourceErr := initwizard.BuildSourcePreview(initwizard.SourcePreviewInput{
 		Config:       cfg,
@@ -765,36 +764,6 @@ func splitCSV(raw string) []string {
 		}
 	}
 	return out
-}
-
-func (m initWizardModel) previewConfig() model.Config {
-	cfg := config.Defaults()
-	licenseID := strings.TrimSpace(m.answers.License.SPDXID)
-	if _, ok := spdx.Lookup(licenseID); !ok && len(m.licenseOptions) > 0 {
-		licenseID = m.licenseOptions[m.licenseIndex]
-	}
-	cfg.License = licenseID
-
-	holder := strings.TrimSpace(m.answers.Identity.Holder)
-	if holder == "" {
-		holder = "Example, Inc."
-	}
-	cfg.Holder = holder
-
-	if year := strings.TrimSpace(m.answers.Identity.Year); year != "" {
-		if ys, err := config.ParseYearSpec(year); err == nil {
-			cfg.Year = ys
-		}
-	}
-	if style := strings.TrimSpace(m.answers.HeaderStyle.Style); style != "" {
-		if st, err := config.ParseStyle(style); err == nil {
-			cfg.Style = st
-		}
-	}
-	cfg.ManageLicenseFile = m.answers.LicenseFiles.Manage
-	cfg.Includes = append([]string(nil), m.answers.Coverage.Include...)
-	cfg.Excludes = append([]string(nil), m.answers.Coverage.Exclude...)
-	return cfg
 }
 
 func previewResolvedYear(y model.YearSpec) string {
