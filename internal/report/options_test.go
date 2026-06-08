@@ -20,6 +20,31 @@ func reportWithViolations() model.Report {
 	return r
 }
 
+func TestPercent(t *testing.T) {
+	assert.Equal(t, "0.0%", percent(5, 0))
+	assert.Equal(t, "50.0%", percent(1, 2))
+	assert.Equal(t, "100.0%", percent(4, 4))
+}
+
+func TestWorstRiskAndSummary(t *testing.T) {
+	var w worstRisk
+	lvl, cat := w.result()
+	assert.Equal(t, "none", lvl)
+	assert.Empty(t, cat)
+
+	w.observe(model.CategoryPermissive)      // low
+	w.observe(model.CategoryStrongCopyleft)  // high beats low
+	w.observe(model.CategoryWeakCopyleft)    // medium does not beat high
+	w.observe(model.CategoryNetworkCopyleft) // tie on high, higher enum wins
+	w.observe(model.CategoryUnknown)         // unknown (rank 0) loses
+	lvl, cat = w.result()
+	assert.Equal(t, "high", lvl)
+	assert.Equal(t, "network-copyleft", cat)
+
+	assert.Equal(t, "none", Findings{}.riskSummary())
+	assert.Equal(t, "high (network-copyleft)", Findings{RiskLevel: "high", WorstCategory: "network-copyleft"}.riskSummary())
+}
+
 func TestToViolationDetailsSortsDedupesAndHandlesEmpty(t *testing.T) {
 	assert.Empty(t, toViolationDetails(nil))
 

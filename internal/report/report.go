@@ -186,10 +186,16 @@ func Build(root string, cfg model.Config, files []model.FileResult, deps []model
 // vendored curated set. Ids outside the curated rendering set classify as unknown,
 // which is the honest answer: we have no vendored metadata to categorize them.
 func categoryToken(id string) string {
+	return classifyCategory(id).String()
+}
+
+// classifyCategory maps an SPDX id to its model.Category via the vendored snapshot;
+// ids outside the curated set are CategoryUnknown.
+func classifyCategory(id string) model.Category {
 	if lic, ok := spdx.Lookup(id); ok {
-		return lic.Category.String()
+		return lic.Category
 	}
-	return model.CategoryUnknown.String()
+	return model.CategoryUnknown
 }
 
 // conditionFromToken maps a stable fail_on token back to its FailCondition. It is
@@ -552,11 +558,32 @@ func renderCountSection(bw *errWriter, title string, counts map[string]int, empt
 	bw.printf("%s:\n", title)
 	if len(counts) == 0 {
 		bw.printf("  %s\n", emptyLabel)
+		bw.printf("\n")
+		return
 	}
+	total := sumCounts(counts)
 	for _, kv := range sortedCounts(counts) {
-		bw.printf("  %-24s %d\n", kv.key, kv.count)
+		bw.printf("  %-24s %4d  (%s)\n", kv.key, kv.count, percent(kv.count, total))
 	}
+	bw.printf("  %-24s %4d\n", "total", total)
 	bw.printf("\n")
+}
+
+// sumCounts totals a count map.
+func sumCounts(counts map[string]int) int {
+	total := 0
+	for _, v := range counts {
+		total += v
+	}
+	return total
+}
+
+// percent formats n as a one-decimal percentage of total ("55.6%"); 0/0 is "0.0%".
+func percent(n, total int) string {
+	if total == 0 {
+		return "0.0%"
+	}
+	return fmt.Sprintf("%.1f%%", float64(n)*100/float64(total))
 }
 
 // renderGroupedFiles prints the source files grouped under opts.GroupBy. Under
@@ -637,26 +664,11 @@ func renderMarkdown(w io.Writer, r model.Report, opts RenderOptions) error {
 	bw.printf("- **Style:** `%s`\n", r.Config.Style)
 	bw.printf("- **Result:** %s\n\n", passLabel(r.Passed))
 
-	bw.printf("## By SPDX id\n\n")
-	bw.printf("| SPDX id | Files |\n| --- | --- |\n")
-	for _, kv := range sortedCounts(r.LicenseCounts) {
-		bw.printf("| `%s` | %d |\n", kv.key, kv.count)
-	}
-	bw.printf("\n")
+	renderMarkdownFindings(bw, buildFindings(r))
 
-	bw.printf("## By category\n\n")
-	bw.printf("| Category | Files |\n| --- | --- |\n")
-	for _, kv := range sortedCounts(r.CategoryCounts) {
-		bw.printf("| %s | %d |\n", kv.key, kv.count)
-	}
-	bw.printf("\n")
-
-	bw.printf("## By file type\n\n")
-	bw.printf("| File type | Files |\n| --- | --- |\n")
-	for _, kv := range sortedCounts(r.FileTypeCounts) {
-		bw.printf("| %s | %d |\n", kv.key, kv.count)
-	}
-	bw.printf("\n")
+	renderMarkdownCountTable(bw, "By SPDX id", "SPDX id", r.LicenseCounts)
+	renderMarkdownCountTable(bw, "By category", "Category", r.CategoryCounts)
+	renderMarkdownCountTable(bw, "By file type", "File type", r.FileTypeCounts)
 
 	switch {
 	case opts.GroupBy != GroupNone:
@@ -704,6 +716,34 @@ func renderMarkdownViolations(bw *errWriter, r model.Report) {
 		}
 		bw.printf("\n")
 	}
+}
+
+// renderMarkdownFindings renders the at-a-glance summary (coverage, license mix,
+// risk, copyleft, dependency resolution, policy) so Markdown reports carry the same
+// overview the text renderer does.
+func renderMarkdownFindings(bw *errWriter, f Findings) {
+	bw.printf("## Findings\n\n")
+	bw.printf("- **Source files:** %d (headered %d, missing %d)\n", f.SourceTotal, f.SourceHeadered, f.SourceMissing)
+	bw.printf("- **License types:** %s\n", f.licenseSummary())
+	bw.printf("- **Risk:** %s\n", f.riskSummary())
+	bw.printf("- **Copyleft:** %s\n", f.copyleftSummary())
+	bw.printf("- **Unknown/unrecognized:** %d\n", f.UnknownCount)
+	if f.DepsScanned {
+		bw.printf("- **Dependencies:** %d (resolved %d, unresolved %d)\n", f.DepsTotal, f.DepsResolved, f.DepsUnresolved)
+	}
+	bw.printf("- **Policy:** %s\n\n", f.policySummary())
+}
+
+// renderMarkdownCountTable renders one count rollup as a table with a percentage
+// column and a total row.
+func renderMarkdownCountTable(bw *errWriter, heading, keyHeader string, counts map[string]int) {
+	bw.printf("## %s\n\n", heading)
+	bw.printf("| %s | Files | %% |\n| --- | --- | --- |\n", keyHeader)
+	total := sumCounts(counts)
+	for _, kv := range sortedCounts(counts) {
+		bw.printf("| `%s` | %d | %s |\n", kv.key, kv.count, percent(kv.count, total))
+	}
+	bw.printf("| **total** | **%d** | |\n\n", total)
 }
 
 // renderMarkdownGroups renders the grouped source-file view. Under --summary it emits
@@ -768,6 +808,7 @@ type jsonReport struct {
 	Root             string           `json:"root"`
 	Passed           bool             `json:"passed"`
 	Config           jsonConfig       `json:"config"`
+	Findings         jsonFindings     `json:"findings"`
 	LicenseCounts    map[string]int   `json:"licenseCounts"`
 	CategoryCounts   map[string]int   `json:"categoryCounts"`
 	FileTypeCounts   map[string]int   `json:"fileTypeCounts"`
@@ -795,12 +836,29 @@ type jsonSummaryReport struct {
 	Root             string          `json:"root"`
 	Passed           bool            `json:"passed"`
 	Config           jsonConfig      `json:"config"`
+	Findings         jsonFindings    `json:"findings"`
 	LicenseCounts    map[string]int  `json:"licenseCounts"`
 	CategoryCounts   map[string]int  `json:"categoryCounts"`
 	FileTypeCounts   map[string]int  `json:"fileTypeCounts"`
 	Groups           []jsonGroup     `json:"groups,omitempty"`
 	Violations       []string        `json:"violations"`
 	ViolationDetails []jsonViolation `json:"violationDetails"`
+}
+
+// jsonFindings is the machine form of the at-a-glance summary, including the explicit
+// riskLevel/worstCategory so a model can branch on a value instead of parsing strings.
+type jsonFindings struct {
+	SourceTotal    int      `json:"sourceTotal"`
+	SourceHeadered int      `json:"sourceHeadered"`
+	SourceMissing  int      `json:"sourceMissing"`
+	UnknownCount   int      `json:"unknownCount"`
+	Copyleft       []string `json:"copyleft"`
+	RiskLevel      string   `json:"riskLevel"`
+	WorstCategory  string   `json:"worstCategory,omitempty"`
+	DepsScanned    bool     `json:"depsScanned"`
+	DepsTotal      int      `json:"depsTotal"`
+	DepsResolved   int      `json:"depsResolved"`
+	DepsUnresolved int      `json:"depsUnresolved"`
 }
 
 // jsonGroup is one grouped bucket in the machine schema. Files is omitted under
@@ -852,6 +910,7 @@ func renderJSON(w io.Writer, r model.Report, opts RenderOptions) error {
 		groups = buildJSONGroups(r, opts)
 	}
 	details := toJSONViolations(r.ViolationDetails)
+	findings := toJSONFindings(buildFindings(r))
 
 	if opts.Summary {
 		return enc.Encode(jsonSummaryReport{
@@ -860,6 +919,7 @@ func renderJSON(w io.Writer, r model.Report, opts RenderOptions) error {
 			Root:             r.Root,
 			Passed:           r.Passed,
 			Config:           jsonConfig{License: r.Config.License, Holder: r.Config.Holder, Style: r.Config.Style.String()},
+			Findings:         findings,
 			LicenseCounts:    nonNilCounts(r.LicenseCounts),
 			CategoryCounts:   nonNilCounts(r.CategoryCounts),
 			FileTypeCounts:   nonNilCounts(r.FileTypeCounts),
@@ -875,6 +935,7 @@ func renderJSON(w io.Writer, r model.Report, opts RenderOptions) error {
 		Root:             r.Root,
 		Passed:           r.Passed,
 		Config:           jsonConfig{License: r.Config.License, Holder: r.Config.Holder, Style: r.Config.Style.String()},
+		Findings:         findings,
 		LicenseCounts:    nonNilCounts(r.LicenseCounts),
 		CategoryCounts:   nonNilCounts(r.CategoryCounts),
 		FileTypeCounts:   nonNilCounts(r.FileTypeCounts),
@@ -928,6 +989,22 @@ func toJSONFile(fr model.FileResult) jsonFile {
 		Diff:       fr.Diff,
 		Violations: nonNilStrings(fr.Violations),
 		Error:      fr.Err,
+	}
+}
+
+func toJSONFindings(f Findings) jsonFindings {
+	return jsonFindings{
+		SourceTotal:    f.SourceTotal,
+		SourceHeadered: f.SourceHeadered,
+		SourceMissing:  f.SourceMissing,
+		UnknownCount:   f.UnknownCount,
+		Copyleft:       nonNilStrings(f.Copyleft),
+		RiskLevel:      f.RiskLevel,
+		WorstCategory:  f.WorstCategory,
+		DepsScanned:    f.DepsScanned,
+		DepsTotal:      f.DepsTotal,
+		DepsResolved:   f.DepsResolved,
+		DepsUnresolved: f.DepsUnresolved,
 	}
 }
 
