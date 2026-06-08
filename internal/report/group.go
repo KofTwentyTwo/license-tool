@@ -26,6 +26,23 @@ const (
 	GroupDirectory
 )
 
+// String renders the dimension as its --group-by token (and the word used in
+// rendered section headers). GroupNone renders as "none".
+func (d GroupDimension) String() string {
+	switch d {
+	case GroupLicense:
+		return "license"
+	case GroupCategory:
+		return "category"
+	case GroupType:
+		return "type"
+	case GroupDirectory:
+		return "directory"
+	default:
+		return "none"
+	}
+}
+
 // ParseGroupBy parses a --group-by token. An empty token is GroupNone (no error);
 // an unrecognized token is a usage error.
 func ParseGroupBy(raw string) (GroupDimension, error) {
