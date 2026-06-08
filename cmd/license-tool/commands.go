@@ -83,6 +83,18 @@ type auditFlags struct {
 	noDeps      bool
 	resolveDeps string
 	failOn      []string
+	summary     bool
+	groupBy     string
+}
+
+// renderOptions parses the summary/group-by flags into report.RenderOptions, surfacing
+// an unknown --group-by value as a usage error.
+func (f auditFlags) renderOptions() (report.RenderOptions, error) {
+	dim, err := report.ParseGroupBy(f.groupBy)
+	if err != nil {
+		return report.RenderOptions{}, err
+	}
+	return report.RenderOptions{Summary: f.summary, GroupBy: dim}, nil
 }
 
 func (f auditFlags) includeDeps() bool {
@@ -108,6 +120,10 @@ func newAuditCmd(shared *sharedFlags) *cobra.Command {
 			if validateErr := validateResolveDeps(f.resolveDeps); validateErr != nil {
 				return usageError(validateErr)
 			}
+			renderOpts, err := f.renderOptions()
+			if err != nil {
+				return usageError(err)
+			}
 			r, err := report.Audit(path, cfg, report.Options{
 				Format:            format,
 				IncludeDeps:       f.includeDeps(),
@@ -117,7 +133,7 @@ func newAuditCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return internalError(err)
 			}
-			if err := renderCommandReport(cmd, f.output, r, format); err != nil {
+			if err := renderCommandReport(cmd, f.output, r, format, renderOpts); err != nil {
 				return err
 			}
 			return nil
@@ -153,6 +169,10 @@ func newCheckCmd(shared *sharedFlags) *cobra.Command {
 			if validateErr := validateResolveDeps(f.resolveDeps); validateErr != nil {
 				return usageError(validateErr)
 			}
+			renderOpts, err := f.renderOptions()
+			if err != nil {
+				return usageError(err)
+			}
 			r, err := report.Audit(path, cfg, report.Options{
 				Format:            format,
 				IncludeDeps:       f.includeDeps(),
@@ -162,7 +182,7 @@ func newCheckCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return internalError(err)
 			}
-			if err := renderCommandReport(cmd, f.output, r, format); err != nil {
+			if err := renderCommandReport(cmd, f.output, r, format, renderOpts); err != nil {
 				return err
 			}
 			if !r.Passed {
@@ -184,6 +204,8 @@ func bindAuditFlags(cmd *cobra.Command, f *auditFlags, isCheck bool) {
 	cmd.Flags().BoolVar(&f.deps, "deps", true, "resolve dependency licenses")
 	cmd.Flags().BoolVar(&f.noDeps, "no-deps", false, "skip dependency license resolution")
 	cmd.Flags().StringVar(&f.resolveDeps, "resolve-deps", "ondisk", "dependency resolution tier: ondisk|tool|off")
+	cmd.Flags().BoolVar(&f.summary, "summary", false, "counts only: omit the per-file and per-dependency lists")
+	cmd.Flags().StringVar(&f.groupBy, "group-by", "", "group source files by: license|category|type|directory")
 	if isCheck {
 		cmd.Flags().StringArrayVar(&f.failOn, "fail-on", []string{"missing-header", "unknown-license", "policy-violation"}, "conditions that cause a non-zero exit")
 	}
@@ -310,9 +332,9 @@ var createReportFile = func(name string) (io.WriteCloser, error) {
 	return os.Create(name)
 }
 
-func renderCommandReport(cmd *cobra.Command, output string, r model.Report, format report.Format) error {
+func renderCommandReport(cmd *cobra.Command, output string, r model.Report, format report.Format, opts report.RenderOptions) error {
 	if output == "" {
-		if err := report.Render(cmd.OutOrStdout(), r, format); err != nil {
+		if err := report.RenderWithOptions(cmd.OutOrStdout(), r, format, opts); err != nil {
 			return internalError(err)
 		}
 		return nil
@@ -322,7 +344,7 @@ func renderCommandReport(cmd *cobra.Command, output string, r model.Report, form
 	if err != nil {
 		return internalError(fmt.Errorf("report: create output %s: %w", output, err))
 	}
-	renderErr := report.Render(f, r, format)
+	renderErr := report.RenderWithOptions(f, r, format, opts)
 	closeErr := f.Close()
 	if renderErr != nil {
 		return internalError(renderErr)

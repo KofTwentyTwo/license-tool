@@ -1005,12 +1005,12 @@ func TestRenderCommandReportErrors(t *testing.T) {
 	var out bytes.Buffer
 	root.SetOut(&out)
 
-	err := renderCommandReport(root, "", model.Report{}, report.Format(99))
+	err := renderCommandReport(root, "", model.Report{}, report.Format(99), report.RenderOptions{})
 	require.Error(t, err)
 	assert.Equal(t, exitInternal, exitCode(err))
 	assert.Empty(t, out.String())
 
-	err = renderCommandReport(root, filepath.Join(t.TempDir(), "report.txt"), model.Report{}, report.Format(99))
+	err = renderCommandReport(root, filepath.Join(t.TempDir(), "report.txt"), model.Report{}, report.Format(99), report.RenderOptions{})
 	require.Error(t, err)
 	assert.Equal(t, exitInternal, exitCode(err))
 
@@ -1020,7 +1020,7 @@ func TestRenderCommandReportErrors(t *testing.T) {
 	}
 	t.Cleanup(func() { createReportFile = orig })
 
-	err = renderCommandReport(root, filepath.Join(t.TempDir(), "report.txt"), model.Report{}, report.FormatText)
+	err = renderCommandReport(root, filepath.Join(t.TempDir(), "report.txt"), model.Report{}, report.FormatText, report.RenderOptions{})
 	require.Error(t, err)
 	assert.Equal(t, exitInternal, exitCode(err))
 	assert.Contains(t, err.Error(), "close failed")
@@ -1030,6 +1030,41 @@ func TestWriteOrInternalErrorClassifiesUnexpectedErrors(t *testing.T) {
 	err := writeOrInternalError(errors.New("disk full"))
 	require.Error(t, err)
 	assert.Equal(t, exitInternal, exitCode(err))
+}
+
+func TestAuditSummaryOmitsFileList(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t)
+	out, err := runRoot(t, "audit", dir, "--deps=false", "--summary")
+	require.NoError(t, err)
+	assert.Contains(t, out, "by SPDX id:")
+	assert.NotContains(t, out, "\nsource files:")
+}
+
+func TestAuditGroupByLicense(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t)
+	out, err := runRoot(t, "audit", dir, "--deps=false", "--group-by", "license")
+	require.NoError(t, err)
+	assert.Contains(t, out, "source files by license:")
+}
+
+func TestAuditGroupByUnknownIsUsageError(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t)
+	stdout, stderr, code := executeRoot(t, "audit", dir, "--deps=false", "--group-by", "bogus")
+	assert.Equal(t, 2, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "unknown group-by dimension")
+}
+
+func TestCheckGroupByUnknownIsUsageError(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t)
+	stdout, stderr, code := executeRoot(t, "check", dir, "--deps=false", "--group-by", "bogus")
+	assert.Equal(t, 2, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "unknown group-by dimension")
 }
 
 func TestLicenseSelectOptions(t *testing.T) {

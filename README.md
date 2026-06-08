@@ -54,7 +54,20 @@ license-tool audit --format json --output audit.json
 license-tool audit --format markdown --output LICENSE-AUDIT.md
 license-tool audit --deps=false
 license-tool audit --resolve-deps tool
+license-tool audit --summary                 # counts only; no per-file/dependency lists
+license-tool audit --group-by license        # group source files by license
+license-tool audit --group-by directory      # group by top-level directory
+license-tool audit --summary --group-by type # per-group counts only
 ```
+
+By default the report lists every source file. `--summary` keeps the `findings:`
+overview and the by-SPDX / by-category / by-file-type rollups but omits the per-file
+and per-dependency lists and any pending diffs. `--group-by license|category|type|directory`
+organizes the source-file listing under each value of the dimension (with per-group
+counts) instead of a flat list; combined with `--summary` it shows per-group counts
+only. The flags apply to text, markdown, and JSON (JSON gains a `groups` array and
+trims detail under `--summary`); they group source files, leaving the dependency
+section unchanged. An unknown `--group-by` value is a usage error.
 
 Audit output is read-only. Audit always prints a "not legal advice" disclaimer.
 Text output starts with a `findings:` summary that calls out source-file header
@@ -70,6 +83,39 @@ findings:
   dependencies: 8 (resolved 6, unresolved 2)
   policy: FAIL (1: policy-violation)
 ```
+
+`--group-by` turns the flat file list into a grouped view. For example,
+`audit --group-by license` shows exactly which files carry which license, and where
+the gaps are:
+
+```text
+source files by license:
+  (none) (1)
+    src/legacy.go  [no managed header]
+  AGPL-3.0-or-later (2)
+    src/a.go  [AGPL-3.0-or-later]
+    src/b.go  [AGPL-3.0-or-later]
+  Apache-2.0 (1)
+    scripts/run.sh  [Apache-2.0]
+  MIT (2)
+    web/c.ts  [MIT]
+    web/d.ts  [MIT]
+  (skipped: 6)
+```
+
+For a tree-shaped view of coverage, `audit --summary --group-by directory` answers
+"which parts of the repo are licensed" at a glance, with no per-file noise:
+
+```text
+source files by directory:
+  scripts (1)
+  src (3)
+  web (2)
+  (skipped: 6)
+```
+
+And `audit --group-by license --format json` emits the same grouping as machine data
+(a `groups` array of `{key, count, files}`) for dashboards and CI summaries.
 
 Dependency audit discovers manifests in the root and in subdirectories, while
 honoring git, `.gitignore`, configured excludes, and common vendor-heavy
