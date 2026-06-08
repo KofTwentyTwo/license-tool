@@ -69,6 +69,77 @@ type GroupSpec struct {
 	Depth int
 }
 
+// OnlyFilter restricts the source-file listing to "problem" files.
+type OnlyFilter int
+
+const (
+	// OnlyMissing keeps files with no managed header.
+	OnlyMissing OnlyFilter = iota
+	// OnlyUnknown keeps files whose detected license is unclassifiable.
+	OnlyUnknown
+	// OnlyCopyleft keeps files under a copyleft license (weak/strong/network).
+	OnlyCopyleft
+	// OnlyViolations keeps files carrying a policy violation.
+	OnlyViolations
+)
+
+// ParseOnly parses a comma-separated --only spec into filters. Empty yields none (no
+// filtering); an unrecognized token is a usage error.
+func ParseOnly(raw string) ([]OnlyFilter, error) {
+	var out []OnlyFilter
+	for _, tok := range strings.Split(raw, ",") {
+		tok = strings.TrimSpace(tok)
+		switch tok {
+		case "":
+			continue
+		case "missing":
+			out = append(out, OnlyMissing)
+		case "unknown":
+			out = append(out, OnlyUnknown)
+		case "copyleft":
+			out = append(out, OnlyCopyleft)
+		case "violations":
+			out = append(out, OnlyViolations)
+		default:
+			return nil, fmt.Errorf("report: unknown --only filter %q (expected missing|unknown|copyleft|violations)", tok)
+		}
+	}
+	return out, nil
+}
+
+// keepFile reports whether fr passes the --only filters (matches ANY). An empty
+// filter set keeps everything; skipped files never match a problem filter.
+func keepFile(fr model.FileResult, only []OnlyFilter) bool {
+	if len(only) == 0 {
+		return true
+	}
+	if fr.Skipped {
+		return false
+	}
+	for _, f := range only {
+		switch f {
+		case OnlyMissing:
+			if !fr.Detected.Present {
+				return true
+			}
+		case OnlyUnknown:
+			if fr.Detected.Present && fr.Detected.SPDXID != "" && classifyCategory(fr.Detected.SPDXID) == model.CategoryUnknown {
+				return true
+			}
+		case OnlyCopyleft:
+			switch classifyCategory(fr.Detected.SPDXID) {
+			case model.CategoryWeakCopyleft, model.CategoryStrongCopyleft, model.CategoryNetworkCopyleft:
+				return true
+			}
+		case OnlyViolations:
+			if len(fr.Violations) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Group is one bucket of the grouped source-file view: a key, the count of files in
 // it, the worst obligation risk among its files, the license breakdown within it, and
 // the files themselves (sorted by path).

@@ -426,11 +426,30 @@ type RenderOptions struct {
 	// DirectoryDepth is how many leading path segments form a directory group key
 	// (min 1); only meaningful with GroupBy == GroupDirectory.
 	DirectoryDepth int
+	// Only restricts the source-file listing to problem files; empty lists all.
+	Only []OnlyFilter
 }
 
 // spec builds the GroupSpec for the current options.
 func (o RenderOptions) spec() GroupSpec {
 	return GroupSpec{By: o.GroupBy, Depth: o.DirectoryDepth}
+}
+
+// listingReport returns r with its Files filtered by the --only set, for the
+// (flat or grouped) file listing. The count rollups and findings stay derived from
+// the full report, so --only narrows what is listed without distorting the totals.
+func (o RenderOptions) listingReport(r model.Report) model.Report {
+	if len(o.Only) == 0 {
+		return r
+	}
+	filtered := make([]model.FileResult, 0, len(r.Files))
+	for _, fr := range r.Files {
+		if keepFile(fr, o.Only) {
+			filtered = append(filtered, fr)
+		}
+	}
+	r.Files = filtered
+	return r
 }
 
 // Render writes the report in the requested format to w with default options. It is
@@ -516,12 +535,13 @@ func renderText(w io.Writer, r model.Report, opts RenderOptions) error {
 
 	// Source-file listing: flat by default, grouped under --group-by, omitted under
 	// --summary (a bare --summary with no group-by shows only the rollups above).
+	lr := opts.listingReport(r)
 	switch {
 	case opts.GroupBy != GroupNone:
-		renderGroupedFiles(bw, r, opts)
+		renderGroupedFiles(bw, lr, opts)
 	case !opts.Summary:
-		bw.printf("source files: %d\n", len(r.Files))
-		for _, fr := range sortedFiles(r.Files) {
+		bw.printf("source files: %d\n", len(lr.Files))
+		for _, fr := range sortedFiles(lr.Files) {
 			bw.printf("  %s\n", fileLine(fr))
 		}
 		bw.printf("\n")
@@ -694,13 +714,14 @@ func renderMarkdown(w io.Writer, r model.Report, opts RenderOptions) error {
 	renderMarkdownCountTable(bw, "By category", "Category", r.CategoryCounts, opts.SortByCount)
 	renderMarkdownCountTable(bw, "By file type", "File type", r.FileTypeCounts, opts.SortByCount)
 
+	lr := opts.listingReport(r)
 	switch {
 	case opts.GroupBy != GroupNone:
-		renderMarkdownGroups(bw, r, opts)
+		renderMarkdownGroups(bw, lr, opts)
 	case !opts.Summary:
-		bw.printf("## Source files (%d)\n\n", len(r.Files))
+		bw.printf("## Source files (%d)\n\n", len(lr.Files))
 		bw.printf("| Path | File type | Status |\n| --- | --- | --- |\n")
-		for _, fr := range sortedFiles(r.Files) {
+		for _, fr := range sortedFiles(lr.Files) {
 			bw.printf("| `%s` | %s | %s |\n", fr.Path, orNone(fr.FileType), mdFileStatus(fr))
 		}
 		bw.printf("\n")
@@ -917,9 +938,10 @@ func renderJSON(w io.Writer, r model.Report, opts RenderOptions) error {
 	// Map keys are marshaled in sorted order by encoding/json, and every slice is
 	// pre-sorted, so the emitted JSON is byte-stable for identical reports.
 
+	lr := opts.listingReport(r)
 	var groups []jsonGroup
 	if opts.GroupBy != GroupNone {
-		groups = buildJSONGroups(r, opts)
+		groups = buildJSONGroups(lr, opts)
 	}
 	details := toJSONViolations(r.ViolationDetails)
 	findings := toJSONFindings(buildFindings(r))
@@ -942,8 +964,8 @@ func renderJSON(w io.Writer, r model.Report, opts RenderOptions) error {
 		ViolationDetails: details,
 	}
 
-	out.Files = make([]jsonFile, 0, len(r.Files))
-	for _, fr := range sortedFiles(r.Files) {
+	out.Files = make([]jsonFile, 0, len(lr.Files))
+	for _, fr := range sortedFiles(lr.Files) {
 		out.Files = append(out.Files, toJSONFile(fr))
 	}
 

@@ -253,3 +253,41 @@ func TestRenderDirectoryBreakdown(t *testing.T) {
 	assert.Contains(t, g, "licenses")
 	assert.Contains(t, g, "risk")
 }
+
+func TestParseOnly(t *testing.T) {
+	got, err := ParseOnly("missing, copyleft,violations,unknown")
+	require.NoError(t, err)
+	assert.Equal(t, []OnlyFilter{OnlyMissing, OnlyCopyleft, OnlyViolations, OnlyUnknown}, got)
+
+	empty, err := ParseOnly("")
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+
+	_, err = ParseOnly("bogus")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown --only filter")
+}
+
+func TestKeepFile(t *testing.T) {
+	missing := model.FileResult{Path: "a.go"}
+	mit := headered("b.go", "Go", "MIT")
+	agpl := headered("c.go", "Go", "AGPL-3.0-or-later")
+	unknownLic := headered("d.go", "Go", "Frobnicate-9000")
+	violating := model.FileResult{Path: "e.go", Detected: model.DetectedHeader{Present: true, SPDXID: "MIT"}, Violations: []string{"policy-violation"}}
+	skipped := model.FileResult{Path: "x.bin", Skipped: true}
+
+	assert.True(t, keepFile(missing, nil))                        // empty -> keep all
+	assert.False(t, keepFile(skipped, []OnlyFilter{OnlyMissing})) // skipped never matches
+	assert.True(t, keepFile(missing, []OnlyFilter{OnlyMissing}))
+	assert.False(t, keepFile(mit, []OnlyFilter{OnlyMissing}))
+	assert.True(t, keepFile(unknownLic, []OnlyFilter{OnlyUnknown}))
+	assert.True(t, keepFile(agpl, []OnlyFilter{OnlyCopyleft}))
+	assert.False(t, keepFile(mit, []OnlyFilter{OnlyCopyleft}))
+	assert.True(t, keepFile(violating, []OnlyFilter{OnlyViolations}))
+}
+
+func TestRenderTextOnlyFilter(t *testing.T) {
+	out := renderToString(t, optionsFixture(), FormatText, RenderOptions{Only: []OnlyFilter{OnlyMissing}})
+	assert.Contains(t, out, "src/b.go")    // headerless kept
+	assert.NotContains(t, out, "src/a.go") // MIT-headered filtered out
+}

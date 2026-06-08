@@ -1229,3 +1229,15 @@ func (w closeErrorWriter) Write(p []byte) (int, error) {
 func (w closeErrorWriter) Close() error {
 	return w.closeErr
 }
+
+func TestAuditOnlyFilter(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t) // headerless main.go
+	out, err := runRoot(t, "audit", dir, "--deps=false", "--only", "missing")
+	require.NoError(t, err)
+	assert.Contains(t, out, "main.go")
+
+	_, stderr, code := executeRoot(t, "audit", dir, "--deps=false", "--only", "bogus")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, stderr, "unknown --only filter")
+}
