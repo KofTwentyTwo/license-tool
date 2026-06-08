@@ -44,7 +44,7 @@ type PanelPlan struct {
 const (
 	layoutMinWidth         = 60
 	layoutMinHeight        = 20
-	layoutFormWidth        = 40
+	layoutFormWidth        = 46
 	layoutWideBreakpoint   = 110
 	layoutMediumBreakpoint = 80
 	layoutGutter           = 1
