@@ -60,6 +60,7 @@ license-tool audit --group-by directory      # group by top-level directory
 license-tool audit --summary --group-by type # per-group counts only
 license-tool audit --group-by directory --depth 2  # group by two path segments
 license-tool audit --group-by license --sort count # most common first
+license-tool audit --only missing,copyleft         # list only problem files
 ```
 
 By default the report lists every source file. `--summary` keeps the `findings:`
@@ -69,9 +70,11 @@ organizes the source-file listing under each value of the dimension instead of a
 list; combined with `--summary` it shows per-group counts only. Each group reports its
 worst license **risk** (`high`/`medium`/`low`) and, for non-license groupings, its
 license breakdown, so a `directory` view is not license-blind. `--sort key|count`
-orders rollups and groups; `--depth N` widens directory keys to N path segments. The
-flags apply to text, markdown, and JSON; they group source files, leaving the
-dependency section unchanged. An unknown `--group-by`/`--sort` value is a usage error.
+orders rollups and groups; `--depth N` widens directory keys to N path segments;
+`--only missing,unknown,copyleft,violations` narrows the file listing to problem files
+without distorting the rollups. The flags apply to text, markdown, and JSON (which
+always emits the complete report — `--summary` only trims the human formats). An
+unknown `--group-by`/`--sort`/`--only` value is a usage error.
 
 Every format now carries the `findings` summary (coverage, license mix, risk level,
 copyleft, dependency resolution, policy) and **attributable policy violations** — each
