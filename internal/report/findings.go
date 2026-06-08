@@ -139,7 +139,7 @@ func (f Findings) licenseSummary() string {
 		parts = append(parts, fmt.Sprintf("%s %d", id, f.LicenseCounts[id]))
 	}
 	if f.SourceMissing > 0 {
-		parts = append(parts, fmt.Sprintf("none %d", f.SourceMissing))
+		parts = append(parts, fmt.Sprintf("%s %d", noLicenseKey, f.SourceMissing))
 	}
 	if len(parts) == 0 {
 		return "(none)"

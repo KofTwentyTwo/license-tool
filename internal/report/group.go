@@ -149,6 +149,11 @@ func groupRisk(files []model.FileResult) string {
 		}
 	}
 	level, _ := w.result()
+	if level == "none" {
+		// A non-empty group with no classifiable license (all missing/headerless) is an
+		// audit liability, not "all clear" -- report it as unknown risk.
+		return "unknown"
+	}
 	return level
 }
 

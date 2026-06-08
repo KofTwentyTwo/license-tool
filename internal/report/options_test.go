@@ -216,27 +216,25 @@ func TestRenderJSONGroupBy(t *testing.T) {
 	assert.Contains(t, raw, "dependencies")
 }
 
-func TestRenderJSONSummaryTrimsDetail(t *testing.T) {
+func TestRenderJSONIgnoresSummaryTrim(t *testing.T) {
+	// JSON is always the complete report: --summary only trims human formats, so a
+	// machine consumer still gets files, dependencies, and findings in one call.
 	out := renderToString(t, optionsFixture(), FormatJSON, RenderOptions{Summary: true})
 	var raw map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &raw))
 	assert.Equal(t, "license-tool/report/v1", raw["schema"])
-	assert.Contains(t, raw, "licenseCounts")
-	assert.NotContains(t, raw, "files")
-	assert.NotContains(t, raw, "dependencies")
-	assert.NotContains(t, raw, "groups") // none requested
+	assert.Contains(t, raw, "files")
+	assert.Contains(t, raw, "dependencies")
+	assert.Contains(t, raw, "findings")
 }
 
-func TestRenderJSONSummaryGroupByCountsOnly(t *testing.T) {
+func TestRenderJSONSummaryGroupKeepsFiles(t *testing.T) {
 	out := renderToString(t, optionsFixture(), FormatJSON, RenderOptions{Summary: true, GroupBy: GroupCategory})
 	var raw map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &raw))
-	groups := raw["groups"].([]any)
-	require.NotEmpty(t, groups)
-	first := groups[0].(map[string]any)
+	first := raw["groups"].([]any)[0].(map[string]any)
 	assert.Contains(t, first, "count")
-	assert.NotContains(t, first, "files") // counts only under summary
-	assert.NotContains(t, raw, "files")
+	assert.Contains(t, first, "files") // JSON groups always carry detail
 }
 
 func TestRenderDirectoryBreakdown(t *testing.T) {

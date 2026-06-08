@@ -855,24 +855,6 @@ type jsonViolation struct {
 	Message   string `json:"message"`
 }
 
-// jsonSummaryReport is the trimmed schema emitted under --summary: counts, optional
-// groups, and violations, but no per-file or per-dependency detail. A dedicated
-// struct keeps the default (full) jsonReport byte-identical to its historical shape.
-type jsonSummaryReport struct {
-	Schema           string          `json:"schema"`
-	Disclaimer       string          `json:"disclaimer"`
-	Root             string          `json:"root"`
-	Passed           bool            `json:"passed"`
-	Config           jsonConfig      `json:"config"`
-	Findings         jsonFindings    `json:"findings"`
-	LicenseCounts    map[string]int  `json:"licenseCounts"`
-	CategoryCounts   map[string]int  `json:"categoryCounts"`
-	FileTypeCounts   map[string]int  `json:"fileTypeCounts"`
-	Groups           []jsonGroup     `json:"groups,omitempty"`
-	Violations       []string        `json:"violations"`
-	ViolationDetails []jsonViolation `json:"violationDetails"`
-}
-
 // jsonFindings is the machine form of the at-a-glance summary, including the explicit
 // riskLevel/worstCategory so a model can branch on a value instead of parsing strings.
 type jsonFindings struct {
@@ -942,23 +924,9 @@ func renderJSON(w io.Writer, r model.Report, opts RenderOptions) error {
 	details := toJSONViolations(r.ViolationDetails)
 	findings := toJSONFindings(buildFindings(r))
 
-	if opts.Summary {
-		return enc.Encode(jsonSummaryReport{
-			Schema:           "license-tool/report/v1",
-			Disclaimer:       Disclaimer,
-			Root:             r.Root,
-			Passed:           r.Passed,
-			Config:           jsonConfig{License: r.Config.License, Holder: r.Config.Holder, Style: r.Config.Style.String()},
-			Findings:         findings,
-			LicenseCounts:    nonNilCounts(r.LicenseCounts),
-			CategoryCounts:   nonNilCounts(r.CategoryCounts),
-			FileTypeCounts:   nonNilCounts(r.FileTypeCounts),
-			Groups:           groups,
-			Violations:       nonNilStrings(r.Violations),
-			ViolationDetails: details,
-		})
-	}
-
+	// JSON always emits the complete report regardless of --summary: machine consumers
+	// (scripts, dashboards, LLMs) want the full data in one call and slice it
+	// themselves. --summary only trims the human (text/markdown) renderers.
 	out := jsonReport{
 		Schema:           "license-tool/report/v1",
 		Disclaimer:       Disclaimer,
@@ -995,11 +963,9 @@ func buildJSONGroups(r model.Report, opts RenderOptions) []jsonGroup {
 	out := make([]jsonGroup, 0, len(groups))
 	for _, g := range groups {
 		jg := jsonGroup{Key: g.Key, Count: g.Count, Risk: g.Risk, Licenses: g.Licenses}
-		if !opts.Summary {
-			jg.Files = make([]jsonFile, 0, len(g.Files))
-			for _, fr := range g.Files {
-				jg.Files = append(jg.Files, toJSONFile(fr))
-			}
+		jg.Files = make([]jsonFile, 0, len(g.Files))
+		for _, fr := range g.Files {
+			jg.Files = append(jg.Files, toJSONFile(fr))
 		}
 		out = append(out, jg)
 	}
