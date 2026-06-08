@@ -539,6 +539,10 @@ func newVersionCmd(info buildInfo) *cobra.Command {
 // content (the report layer needs the bytes for detection); Detect is the detector
 // directly; ResolveDeps iterates the ecosystem resolvers detected at the root and
 // concatenates their findings (unresolved entries included, never guessed).
+// reasonToolConfig is the skip reason recorded for the tool's own config file, so it
+// is shown in the file listing but excluded from source/header coverage tallies.
+const reasonToolConfig = "tool config"
+
 func buildAuditPipeline(cfg model.Config, shared *sharedFlags) report.Pipeline {
 	classify := config.ContentLookupFunc(cfg)
 	return report.Pipeline{
@@ -559,7 +563,15 @@ func buildAuditPipeline(cfg model.Config, shared *sharedFlags) report.Pipeline {
 					Skip:       e.Skip,
 					SkipReason: e.SkipReason,
 				}
-				if !e.Skip {
+				// The tool's own .license-tool.yaml is metadata, not coverable source: it
+				// never carries a managed header, so counting it would inflate
+				// sourceTotal/sourceMissing. Mark it skipped (still listed, with a reason)
+				// rather than counting it as a headerless source file.
+				if !sf.Skip && filepath.Base(e.Path) == config.RepoConfigName {
+					sf.Skip = true
+					sf.SkipReason = reasonToolConfig
+				}
+				if !sf.Skip {
 					content, rerr := os.ReadFile(e.AbsPath)
 					if rerr != nil {
 						sf.Skip = true

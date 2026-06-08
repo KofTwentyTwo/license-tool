@@ -267,6 +267,29 @@ func TestAuditCommand(t *testing.T) {
 		assert.Contains(t, out, `"schema": "license-tool/report/v1"`)
 	})
 
+	t.Run("tool config file is excluded from source coverage", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML)
+		writeFile(t, dir, "main.go", "package main\n\nfunc main() {}\n")
+
+		out, err := runRoot(t, "audit", dir, "--format", "json", "--deps=false")
+		require.NoError(t, err)
+
+		var got struct {
+			Findings struct {
+				SourceTotal   int `json:"sourceTotal"`
+				SourceMissing int `json:"sourceMissing"`
+			} `json:"findings"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(out), &got))
+		assert.Equal(t, 1, got.Findings.SourceTotal, "only main.go is coverable source; the tool's own config is not")
+		assert.Equal(t, 1, got.Findings.SourceMissing, "the headerless config file must not inflate sourceMissing")
+
+		entry := jsonFileEntry(t, out, ".license-tool.yaml")
+		assert.Equal(t, true, entry["skipped"], ".license-tool.yaml should be skipped, not counted as source")
+		assert.Equal(t, "tool config", entry["skipReason"])
+	})
+
 	t.Run("output file", func(t *testing.T) {
 		dir := fixtureDir(t)
 		outPath := filepath.Join(dir, "audit.json")
