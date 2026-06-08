@@ -26,6 +26,26 @@ func TestPercent(t *testing.T) {
 	assert.Equal(t, "100.0%", percent(4, 4))
 }
 
+func TestSortByCountHelpers(t *testing.T) {
+	counts := map[string]int{"a": 1, "b": 3, "c": 2}
+
+	byKey := sortedCountsBy(counts, false)
+	assert.Equal(t, []string{"a", "b", "c"}, []string{byKey[0].key, byKey[1].key, byKey[2].key})
+
+	byCount := sortedCountsBy(counts, true)
+	assert.Equal(t, []string{"b", "c", "a"}, []string{byCount[0].key, byCount[1].key, byCount[2].key})
+
+	groups := []Group{{Key: "a", Count: 1}, {Key: "b", Count: 3}, {Key: "c", Count: 2}}
+	sortGroups(groups, false) // no-op leaves key order
+	assert.Equal(t, "a", groups[0].Key)
+	sortGroups(groups, true)
+	assert.Equal(t, []string{"b", "c", "a"}, []string{groups[0].Key, groups[1].Key, groups[2].Key})
+
+	tied := []Group{{Key: "z", Count: 2}, {Key: "a", Count: 2}}
+	sortGroups(tied, true) // equal counts -> alphabetical key
+	assert.Equal(t, "a", tied[0].Key)
+}
+
 func TestWorstRiskAndSummary(t *testing.T) {
 	var w worstRisk
 	lvl, cat := w.result()
@@ -136,10 +156,10 @@ func TestRenderTextGroupBy(t *testing.T) {
 	out := renderToString(t, optionsFixture(), FormatText, RenderOptions{GroupBy: GroupLicense})
 	assert.Contains(t, out, "source files by license:")
 	assert.Contains(t, out, "MIT (1)")
-	assert.Contains(t, out, "    src/a.go") // nested file line
-	assert.Contains(t, out, "(none) (1)")   // headerless bucket
-	assert.Contains(t, out, "(skipped: 1)") // skipped note
-	assert.Contains(t, out, "left-pad")     // deps list still shown (not summary)
+	assert.Contains(t, out, "    src/a.go")    // nested file line
+	assert.Contains(t, out, "(no-header) (1)") // headerless bucket
+	assert.Contains(t, out, "(skipped: 1)")    // skipped note
+	assert.Contains(t, out, "left-pad")        // deps list still shown (not summary)
 }
 
 func TestRenderTextGroupBySummaryCountsOnly(t *testing.T) {

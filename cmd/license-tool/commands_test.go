@@ -1067,6 +1067,33 @@ func TestCheckGroupByUnknownIsUsageError(t *testing.T) {
 	assert.Contains(t, stderr, "unknown group-by dimension")
 }
 
+func TestParseSort(t *testing.T) {
+	for _, tok := range []string{"", "key"} {
+		got, err := parseSort(tok)
+		require.NoError(t, err)
+		assert.False(t, got)
+	}
+	got, err := parseSort("count")
+	require.NoError(t, err)
+	assert.True(t, got)
+
+	_, err = parseSort("bogus")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown sort")
+}
+
+func TestAuditSortAndUnknownSort(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t)
+
+	_, err := runRoot(t, "audit", dir, "--deps=false", "--sort", "count")
+	require.NoError(t, err)
+
+	_, stderr, code := executeRoot(t, "audit", dir, "--deps=false", "--sort", "bogus")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, stderr, "unknown sort")
+}
+
 func TestLicenseSelectOptions(t *testing.T) {
 	opts := licenseSelectOptions()
 	require.NotEmpty(t, opts, "license picker should offer renderable licenses")

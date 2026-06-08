@@ -63,10 +63,15 @@ func ParseGroupBy(raw string) (GroupDimension, error) {
 }
 
 // Group is one bucket of the grouped source-file view: a key, the count of files in
-// it, and the files themselves (sorted by path).
+// it, the worst obligation risk among its files, and the files themselves (sorted by
+// path).
 type Group struct {
 	Key   string
 	Count int
+	// Risk is the worst category risk among the group's files ("high"|"medium"|
+	// "low"|"none"), so directory/type groups carry a license-risk signal instead of
+	// being a license-blind count.
+	Risk  string
 	Files []model.FileResult
 }
 
@@ -98,9 +103,35 @@ func GroupFiles(r model.Report, dim GroupDimension) (groups []Group, skipped int
 	for _, k := range keys {
 		files := buckets[k]
 		sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-		groups = append(groups, Group{Key: k, Count: len(files), Files: files})
+		groups = append(groups, Group{Key: k, Count: len(files), Risk: groupRisk(files), Files: files})
 	}
 	return groups, skipped
+}
+
+// groupRisk returns the worst category risk among a group's files.
+func groupRisk(files []model.FileResult) string {
+	var w worstRisk
+	for _, fr := range files {
+		if fr.Detected.Present && fr.Detected.SPDXID != "" {
+			w.observe(classifyCategory(fr.Detected.SPDXID))
+		}
+	}
+	level, _ := w.result()
+	return level
+}
+
+// sortGroups orders groups by descending count (ties by key) when byCount is set,
+// otherwise leaves the key-sorted order GroupFiles produced.
+func sortGroups(groups []Group, byCount bool) {
+	if !byCount {
+		return
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		if groups[i].Count != groups[j].Count {
+			return groups[i].Count > groups[j].Count
+		}
+		return groups[i].Key < groups[j].Key
+	})
 }
 
 // groupKey derives a file's bucket key for the given dimension.

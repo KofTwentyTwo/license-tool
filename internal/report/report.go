@@ -31,7 +31,7 @@ const Disclaimer = "This tool reports and enforces license metadata; it is not l
 // empty string: an empty map key is invisible in rendered output and silently
 // indistinguishable from "absent", so missing headers would never surface in the
 // by-license breakdown. A named bucket makes the gap explicit and sortable.
-const noLicenseKey = "(none)"
+const noLicenseKey = "(no-header)"
 
 // Format selects the output rendering.
 type Format int
@@ -420,6 +420,9 @@ type RenderOptions struct {
 	// GroupBy organizes the source-file listing under each value of a dimension
 	// instead of a flat list. GroupNone is the flat default.
 	GroupBy GroupDimension
+	// SortByCount orders the count rollups and groups by descending count (ties by
+	// key) instead of the default alphabetical key order.
+	SortByCount bool
 }
 
 // Render writes the report in the requested format to w with default options. It is
@@ -499,9 +502,9 @@ func renderText(w io.Writer, r model.Report, opts RenderOptions) error {
 	bw.printf("result: %s\n\n", passLabel(r.Passed))
 
 	// The count rollups are always shown (cheap, and the core summary).
-	renderCountSection(bw, "by SPDX id", r.LicenseCounts, "(no managed source files)")
-	renderCountSection(bw, "by category", r.CategoryCounts, "(none)")
-	renderCountSection(bw, "by file type", r.FileTypeCounts, "(none)")
+	renderCountSection(bw, "by SPDX id", r.LicenseCounts, "(no managed source files)", opts.SortByCount)
+	renderCountSection(bw, "by category", r.CategoryCounts, "(none)", opts.SortByCount)
+	renderCountSection(bw, "by file type", r.FileTypeCounts, "(none)", opts.SortByCount)
 
 	// Source-file listing: flat by default, grouped under --group-by, omitted under
 	// --summary (a bare --summary with no group-by shows only the rollups above).
@@ -554,7 +557,7 @@ func renderTextViolations(bw *errWriter, r model.Report) {
 
 // renderCountSection prints a "<title>:" header followed by the sorted counts, or
 // emptyLabel when the map is empty.
-func renderCountSection(bw *errWriter, title string, counts map[string]int, emptyLabel string) {
+func renderCountSection(bw *errWriter, title string, counts map[string]int, emptyLabel string, byCount bool) {
 	bw.printf("%s:\n", title)
 	if len(counts) == 0 {
 		bw.printf("  %s\n", emptyLabel)
@@ -562,7 +565,7 @@ func renderCountSection(bw *errWriter, title string, counts map[string]int, empt
 		return
 	}
 	total := sumCounts(counts)
-	for _, kv := range sortedCounts(counts) {
+	for _, kv := range sortedCountsBy(counts, byCount) {
 		bw.printf("  %-24s %4d  (%s)\n", kv.key, kv.count, percent(kv.count, total))
 	}
 	bw.printf("  %-24s %4d\n", "total", total)
@@ -591,12 +594,13 @@ func percent(n, total int) string {
 // trailing note reports skipped (uneditable) files, which are never grouped.
 func renderGroupedFiles(bw *errWriter, r model.Report, opts RenderOptions) {
 	groups, skipped := GroupFiles(r, opts.GroupBy)
+	sortGroups(groups, opts.SortByCount)
 	bw.printf("source files by %s:\n", opts.GroupBy)
 	if len(groups) == 0 {
 		bw.printf("  (no managed source files)\n")
 	}
 	for _, g := range groups {
-		bw.printf("  %s (%d)\n", g.Key, g.Count)
+		bw.printf("  %s (%d) [risk: %s]\n", g.Key, g.Count, g.Risk)
 		if !opts.Summary {
 			for _, fr := range g.Files {
 				bw.printf("    %s\n", fileLine(fr))
@@ -666,9 +670,9 @@ func renderMarkdown(w io.Writer, r model.Report, opts RenderOptions) error {
 
 	renderMarkdownFindings(bw, buildFindings(r))
 
-	renderMarkdownCountTable(bw, "By SPDX id", "SPDX id", r.LicenseCounts)
-	renderMarkdownCountTable(bw, "By category", "Category", r.CategoryCounts)
-	renderMarkdownCountTable(bw, "By file type", "File type", r.FileTypeCounts)
+	renderMarkdownCountTable(bw, "By SPDX id", "SPDX id", r.LicenseCounts, opts.SortByCount)
+	renderMarkdownCountTable(bw, "By category", "Category", r.CategoryCounts, opts.SortByCount)
+	renderMarkdownCountTable(bw, "By file type", "File type", r.FileTypeCounts, opts.SortByCount)
 
 	switch {
 	case opts.GroupBy != GroupNone:
@@ -736,11 +740,11 @@ func renderMarkdownFindings(bw *errWriter, f Findings) {
 
 // renderMarkdownCountTable renders one count rollup as a table with a percentage
 // column and a total row.
-func renderMarkdownCountTable(bw *errWriter, heading, keyHeader string, counts map[string]int) {
+func renderMarkdownCountTable(bw *errWriter, heading, keyHeader string, counts map[string]int, byCount bool) {
 	bw.printf("## %s\n\n", heading)
 	bw.printf("| %s | Files | %% |\n| --- | --- | --- |\n", keyHeader)
 	total := sumCounts(counts)
-	for _, kv := range sortedCounts(counts) {
+	for _, kv := range sortedCountsBy(counts, byCount) {
 		bw.printf("| `%s` | %d | %s |\n", kv.key, kv.count, percent(kv.count, total))
 	}
 	bw.printf("| **total** | **%d** | |\n\n", total)
@@ -750,17 +754,18 @@ func renderMarkdownCountTable(bw *errWriter, heading, keyHeader string, counts m
 // a single per-group count table; otherwise a per-group heading with a file table.
 func renderMarkdownGroups(bw *errWriter, r model.Report, opts RenderOptions) {
 	groups, skipped := GroupFiles(r, opts.GroupBy)
+	sortGroups(groups, opts.SortByCount)
 	bw.printf("## Source files by %s\n\n", opts.GroupBy)
 
 	if opts.Summary {
-		bw.printf("| %s | Files |\n| --- | --- |\n", titleCase(opts.GroupBy.String()))
+		bw.printf("| %s | Files | Risk |\n| --- | --- | --- |\n", titleCase(opts.GroupBy.String()))
 		for _, g := range groups {
-			bw.printf("| `%s` | %d |\n", g.Key, g.Count)
+			bw.printf("| `%s` | %d | %s |\n", g.Key, g.Count, g.Risk)
 		}
 		bw.printf("\n")
 	} else {
 		for _, g := range groups {
-			bw.printf("### `%s` (%d)\n\n", g.Key, g.Count)
+			bw.printf("### `%s` (%d) — risk: %s\n\n", g.Key, g.Count, g.Risk)
 			bw.printf("| Path | File type | Status |\n| --- | --- | --- |\n")
 			for _, fr := range g.Files {
 				bw.printf("| `%s` | %s | %s |\n", fr.Path, orNone(fr.FileType), mdFileStatus(fr))
@@ -866,6 +871,7 @@ type jsonFindings struct {
 type jsonGroup struct {
 	Key   string     `json:"key"`
 	Count int        `json:"count"`
+	Risk  string     `json:"risk"`
 	Files []jsonFile `json:"files,omitempty"`
 }
 
@@ -961,9 +967,10 @@ func renderJSON(w io.Writer, r model.Report, opts RenderOptions) error {
 // included unless --summary asks for counts only.
 func buildJSONGroups(r model.Report, opts RenderOptions) []jsonGroup {
 	groups, _ := GroupFiles(r, opts.GroupBy)
+	sortGroups(groups, opts.SortByCount)
 	out := make([]jsonGroup, 0, len(groups))
 	for _, g := range groups {
-		jg := jsonGroup{Key: g.Key, Count: g.Count}
+		jg := jsonGroup{Key: g.Key, Count: g.Count, Risk: g.Risk}
 		if !opts.Summary {
 			jg.Files = make([]jsonFile, 0, len(g.Files))
 			for _, fr := range g.Files {
@@ -1047,6 +1054,16 @@ func sortedCounts(m map[string]int) []countKV {
 		out = append(out, countKV{key: k, count: v})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].key < out[j].key })
+	return out
+}
+
+// sortedCountsBy returns the entries key-sorted (default) or by descending count with
+// key ties broken alphabetically when byCount is set.
+func sortedCountsBy(m map[string]int, byCount bool) []countKV {
+	out := sortedCounts(m)
+	if byCount {
+		sort.SliceStable(out, func(i, j int) bool { return out[i].count > out[j].count })
+	}
 	return out
 }
 

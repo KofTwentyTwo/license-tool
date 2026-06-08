@@ -85,16 +85,34 @@ type auditFlags struct {
 	failOn      []string
 	summary     bool
 	groupBy     string
+	sort        string
 }
 
-// renderOptions parses the summary/group-by flags into report.RenderOptions, surfacing
-// an unknown --group-by value as a usage error.
+// renderOptions parses the summary/group-by/sort flags into report.RenderOptions,
+// surfacing an unknown --group-by or --sort value as a usage error.
 func (f auditFlags) renderOptions() (report.RenderOptions, error) {
 	dim, err := report.ParseGroupBy(f.groupBy)
 	if err != nil {
 		return report.RenderOptions{}, err
 	}
-	return report.RenderOptions{Summary: f.summary, GroupBy: dim}, nil
+	byCount, err := parseSort(f.sort)
+	if err != nil {
+		return report.RenderOptions{}, err
+	}
+	return report.RenderOptions{Summary: f.summary, GroupBy: dim, SortByCount: byCount}, nil
+}
+
+// parseSort maps the --sort token to the by-count flag. "" and "key" sort
+// alphabetically; "count" sorts by descending frequency.
+func parseSort(raw string) (bool, error) {
+	switch raw {
+	case "", "key":
+		return false, nil
+	case "count":
+		return true, nil
+	default:
+		return false, fmt.Errorf("audit: unknown sort %q (expected key|count)", raw)
+	}
 }
 
 func (f auditFlags) includeDeps() bool {
@@ -206,6 +224,7 @@ func bindAuditFlags(cmd *cobra.Command, f *auditFlags, isCheck bool) {
 	cmd.Flags().StringVar(&f.resolveDeps, "resolve-deps", "ondisk", "dependency resolution tier: ondisk|tool|off")
 	cmd.Flags().BoolVar(&f.summary, "summary", false, "counts only: omit the per-file and per-dependency lists")
 	cmd.Flags().StringVar(&f.groupBy, "group-by", "", "group source files by: license|category|type|directory")
+	cmd.Flags().StringVar(&f.sort, "sort", "key", "rollup/group order: key|count")
 	if isCheck {
 		cmd.Flags().StringArrayVar(&f.failOn, "fail-on", []string{"missing-header", "unknown-license", "policy-violation"}, "conditions that cause a non-zero exit")
 	}

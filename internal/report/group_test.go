@@ -50,9 +50,9 @@ func TestGroupFilesNone(t *testing.T) {
 func TestGroupFilesByLicense(t *testing.T) {
 	groups, skipped := GroupFiles(sampleReport(), GroupLicense)
 	assert.Equal(t, 1, skipped)
-	// Keys sorted: "(none)" < "AGPL-3.0-or-later" < "MIT".
+	// Keys sorted: "(no-header)" < "AGPL-3.0-or-later" < "MIT".
 	require.Len(t, groups, 3)
-	assert.Equal(t, "(none)", groups[0].Key)
+	assert.Equal(t, "(no-header)", groups[0].Key)
 	assert.Equal(t, 1, groups[0].Count)
 	assert.Equal(t, "src/headerless.go", groups[0].Files[0].Path)
 	assert.Equal(t, "AGPL-3.0-or-later", groups[1].Key)
