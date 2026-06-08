@@ -46,30 +46,6 @@ func TestIsBinary(t *testing.T) {
 	}
 }
 
-// TestMatchesIncludes verifies include-glob semantics: empty includes match all, and
-// a non-empty set matches against both the full relative path and the base name.
-func TestMatchesIncludes(t *testing.T) {
-	cases := []struct {
-		name     string
-		rel      string
-		includes []string
-		want     bool
-	}{
-		{"empty includes match all", "src/Main.java", nil, true},
-		{"base-name glob matches at depth", "a/b/c/x.go", []string{"*.go"}, true},
-		{"full-path glob matches", "src/x.go", []string{"src/*.go"}, true},
-		{"full-path glob does not span dirs", "src/sub/x.go", []string{"src/*.go"}, false},
-		{"no glob matches", "x.ts", []string{"*.go", "*.py"}, false},
-		{"one of several matches", "x.py", []string{"*.go", "*.py"}, true},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, matchesIncludes(tc.rel, tc.includes))
-		})
-	}
-}
-
 // indexEntries maps an enumeration result to relative-path -> Entry for assertions.
 func indexEntries(entries []Entry) map[string]Entry {
 	m := make(map[string]Entry, len(entries))
@@ -236,6 +212,27 @@ func TestEnumerateGitRepoIncludes(t *testing.T) {
 	assert.Contains(t, byPath, "a.go")
 	assert.Contains(t, byPath, "sub/c.go")
 	assert.NotContains(t, byPath, "b.py")
+}
+
+// TestEnumerateGitRepoIncludesDoublestar verifies that ** include globs span
+// directories (issue #32): a src/** include must reach nested files, not just the
+// top level. The previous filepath.Match include path failed this silently.
+func TestEnumerateGitRepoIncludesDoublestar(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+
+	writeFile(t, root, "src/a.go", "package x\n")
+	writeFile(t, root, "src/deep/nested/b.go", "package y\n")
+	writeFile(t, root, "other/c.go", "package z\n")
+	gitAddCommit(t, root)
+
+	entries, err := Enumerate(root, Options{Includes: []string{"src/**"}}, filetype.Lookup)
+	require.NoError(t, err)
+	byPath := indexEntries(entries)
+
+	assert.Contains(t, byPath, "src/a.go")
+	assert.Contains(t, byPath, "src/deep/nested/b.go")
+	assert.NotContains(t, byPath, "other/c.go")
 }
 
 // TestEnumerateNonGitWalk covers the fallback walk: no git repo, .gitignore honored,
