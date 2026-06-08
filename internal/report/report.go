@@ -423,6 +423,14 @@ type RenderOptions struct {
 	// SortByCount orders the count rollups and groups by descending count (ties by
 	// key) instead of the default alphabetical key order.
 	SortByCount bool
+	// DirectoryDepth is how many leading path segments form a directory group key
+	// (min 1); only meaningful with GroupBy == GroupDirectory.
+	DirectoryDepth int
+}
+
+// spec builds the GroupSpec for the current options.
+func (o RenderOptions) spec() GroupSpec {
+	return GroupSpec{By: o.GroupBy, Depth: o.DirectoryDepth}
 }
 
 // Render writes the report in the requested format to w with default options. It is
@@ -572,6 +580,15 @@ func renderCountSection(bw *errWriter, title string, counts map[string]int, empt
 	bw.printf("\n")
 }
 
+// breakdownSummary renders a license breakdown map as "id n, id n" in key order.
+func breakdownSummary(counts map[string]int) string {
+	parts := make([]string, 0, len(counts))
+	for _, kv := range sortedCounts(counts) {
+		parts = append(parts, fmt.Sprintf("%s %d", kv.key, kv.count))
+	}
+	return strings.Join(parts, ", ")
+}
+
 // sumCounts totals a count map.
 func sumCounts(counts map[string]int) int {
 	total := 0
@@ -593,7 +610,7 @@ func percent(n, total int) string {
 // --summary it prints per-group counts only; otherwise it nests the file lines. A
 // trailing note reports skipped (uneditable) files, which are never grouped.
 func renderGroupedFiles(bw *errWriter, r model.Report, opts RenderOptions) {
-	groups, skipped := GroupFiles(r, opts.GroupBy)
+	groups, skipped := GroupFiles(r, opts.spec())
 	sortGroups(groups, opts.SortByCount)
 	bw.printf("source files by %s:\n", opts.GroupBy)
 	if len(groups) == 0 {
@@ -601,6 +618,9 @@ func renderGroupedFiles(bw *errWriter, r model.Report, opts RenderOptions) {
 	}
 	for _, g := range groups {
 		bw.printf("  %s (%d) [risk: %s]\n", g.Key, g.Count, g.Risk)
+		if opts.GroupBy != GroupLicense {
+			bw.printf("    licenses: %s\n", breakdownSummary(g.Licenses))
+		}
 		if !opts.Summary {
 			for _, fr := range g.Files {
 				bw.printf("    %s\n", fileLine(fr))
@@ -753,7 +773,7 @@ func renderMarkdownCountTable(bw *errWriter, heading, keyHeader string, counts m
 // renderMarkdownGroups renders the grouped source-file view. Under --summary it emits
 // a single per-group count table; otherwise a per-group heading with a file table.
 func renderMarkdownGroups(bw *errWriter, r model.Report, opts RenderOptions) {
-	groups, skipped := GroupFiles(r, opts.GroupBy)
+	groups, skipped := GroupFiles(r, opts.spec())
 	sortGroups(groups, opts.SortByCount)
 	bw.printf("## Source files by %s\n\n", opts.GroupBy)
 
@@ -766,6 +786,9 @@ func renderMarkdownGroups(bw *errWriter, r model.Report, opts RenderOptions) {
 	} else {
 		for _, g := range groups {
 			bw.printf("### `%s` (%d) — risk: %s\n\n", g.Key, g.Count, g.Risk)
+			if opts.GroupBy != GroupLicense {
+				bw.printf("Licenses: %s\n\n", breakdownSummary(g.Licenses))
+			}
 			bw.printf("| Path | File type | Status |\n| --- | --- | --- |\n")
 			for _, fr := range g.Files {
 				bw.printf("| `%s` | %s | %s |\n", fr.Path, orNone(fr.FileType), mdFileStatus(fr))
@@ -869,10 +892,11 @@ type jsonFindings struct {
 // jsonGroup is one grouped bucket in the machine schema. Files is omitted under
 // --summary (counts only).
 type jsonGroup struct {
-	Key   string     `json:"key"`
-	Count int        `json:"count"`
-	Risk  string     `json:"risk"`
-	Files []jsonFile `json:"files,omitempty"`
+	Key      string         `json:"key"`
+	Count    int            `json:"count"`
+	Risk     string         `json:"risk"`
+	Licenses map[string]int `json:"licenses"`
+	Files    []jsonFile     `json:"files,omitempty"`
 }
 
 type jsonConfig struct {
@@ -966,11 +990,11 @@ func renderJSON(w io.Writer, r model.Report, opts RenderOptions) error {
 // buildJSONGroups builds the machine grouping for opts.GroupBy. File detail is
 // included unless --summary asks for counts only.
 func buildJSONGroups(r model.Report, opts RenderOptions) []jsonGroup {
-	groups, _ := GroupFiles(r, opts.GroupBy)
+	groups, _ := GroupFiles(r, opts.spec())
 	sortGroups(groups, opts.SortByCount)
 	out := make([]jsonGroup, 0, len(groups))
 	for _, g := range groups {
-		jg := jsonGroup{Key: g.Key, Count: g.Count, Risk: g.Risk}
+		jg := jsonGroup{Key: g.Key, Count: g.Count, Risk: g.Risk, Licenses: g.Licenses}
 		if !opts.Summary {
 			jg.Files = make([]jsonFile, 0, len(g.Files))
 			for _, fr := range g.Files {

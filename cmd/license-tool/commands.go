@@ -86,6 +86,7 @@ type auditFlags struct {
 	summary     bool
 	groupBy     string
 	sort        string
+	depth       int
 }
 
 // renderOptions parses the summary/group-by/sort flags into report.RenderOptions,
@@ -99,7 +100,7 @@ func (f auditFlags) renderOptions() (report.RenderOptions, error) {
 	if err != nil {
 		return report.RenderOptions{}, err
 	}
-	return report.RenderOptions{Summary: f.summary, GroupBy: dim, SortByCount: byCount}, nil
+	return report.RenderOptions{Summary: f.summary, GroupBy: dim, SortByCount: byCount, DirectoryDepth: f.depth}, nil
 }
 
 // parseSort maps the --sort token to the by-count flag. "" and "key" sort
@@ -225,6 +226,7 @@ func bindAuditFlags(cmd *cobra.Command, f *auditFlags, isCheck bool) {
 	cmd.Flags().BoolVar(&f.summary, "summary", false, "counts only: omit the per-file and per-dependency lists")
 	cmd.Flags().StringVar(&f.groupBy, "group-by", "", "group source files by: license|category|type|directory")
 	cmd.Flags().StringVar(&f.sort, "sort", "key", "rollup/group order: key|count")
+	cmd.Flags().IntVar(&f.depth, "depth", 1, "directory grouping depth (with --group-by directory)")
 	if isCheck {
 		cmd.Flags().StringArrayVar(&f.failOn, "fail-on", []string{"missing-header", "unknown-license", "policy-violation"}, "conditions that cause a non-zero exit")
 	}

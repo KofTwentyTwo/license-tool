@@ -62,35 +62,44 @@ func ParseGroupBy(raw string) (GroupDimension, error) {
 	}
 }
 
+// GroupSpec parameterizes GroupFiles: the dimension to group by and, for the
+// directory dimension, how many leading path segments form the key (Depth, min 1).
+type GroupSpec struct {
+	By    GroupDimension
+	Depth int
+}
+
 // Group is one bucket of the grouped source-file view: a key, the count of files in
-// it, the worst obligation risk among its files, and the files themselves (sorted by
-// path).
+// it, the worst obligation risk among its files, the license breakdown within it, and
+// the files themselves (sorted by path).
 type Group struct {
 	Key   string
 	Count int
 	// Risk is the worst category risk among the group's files ("high"|"medium"|
 	// "low"|"none"), so directory/type groups carry a license-risk signal instead of
 	// being a license-blind count.
-	Risk  string
-	Files []model.FileResult
+	Risk string
+	// Licenses is the license breakdown within the group (SPDX id or "(no-header)" ->
+	// count), so a directory/type group shows WHICH licenses it mixes, not just a count.
+	Licenses map[string]int
+	Files    []model.FileResult
 }
 
-// GroupFiles partitions the non-skipped source files of r by dim, returning the
+// GroupFiles partitions the non-skipped source files of r per spec, returning the
 // groups (sorted by key, files sorted by path) and the count of skipped files
 // (binary/uncommentable/unknown) which are never grouped. GroupNone returns no
 // groups. Pure and deterministic for identical input.
-func GroupFiles(r model.Report, dim GroupDimension) (groups []Group, skipped int) {
+func GroupFiles(r model.Report, spec GroupSpec) (groups []Group, skipped int) {
 	buckets := map[string][]model.FileResult{}
 	for _, fr := range r.Files {
 		if fr.Skipped {
 			skipped++
 			continue
 		}
-		if dim == GroupNone {
+		if spec.By == GroupNone {
 			continue
 		}
-		key := groupKey(fr, dim)
-		buckets[key] = append(buckets[key], fr)
+		buckets[groupKeyDepth(fr, spec)] = append(buckets[groupKeyDepth(fr, spec)], fr)
 	}
 
 	keys := make([]string, 0, len(buckets))
@@ -103,9 +112,32 @@ func GroupFiles(r model.Report, dim GroupDimension) (groups []Group, skipped int
 	for _, k := range keys {
 		files := buckets[k]
 		sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-		groups = append(groups, Group{Key: k, Count: len(files), Risk: groupRisk(files), Files: files})
+		groups = append(groups, Group{
+			Key:      k,
+			Count:    len(files),
+			Risk:     groupRisk(files),
+			Licenses: licenseBreakdown(files),
+			Files:    files,
+		})
 	}
 	return groups, skipped
+}
+
+// groupKeyDepth derives a file's bucket key, honoring the directory depth.
+func groupKeyDepth(fr model.FileResult, spec GroupSpec) string {
+	if spec.By == GroupDirectory {
+		return topDirs(fr.Path, spec.Depth)
+	}
+	return groupKey(fr, spec.By)
+}
+
+// licenseBreakdown counts the license (or no-header) of each file in a group.
+func licenseBreakdown(files []model.FileResult) map[string]int {
+	out := map[string]int{}
+	for _, fr := range files {
+		out[groupKey(fr, GroupLicense)]++
+	}
+	return out
 }
 
 // groupRisk returns the worst category risk among a group's files.
@@ -147,22 +179,30 @@ func groupKey(fr model.FileResult, dim GroupDimension) string {
 			return categoryToken(fr.Detected.SPDXID)
 		}
 		return model.CategoryUnknown.String()
-	case GroupType:
+	default: // GroupType
 		if fr.FileType != "" {
 			return fr.FileType
 		}
 		return "(unknown type)"
-	default: // GroupDirectory
-		return topDir(fr.Path)
 	}
 }
 
-// topDir returns the first path segment of a forward-slash path; root-level files
-// group under ".".
-func topDir(path string) string {
-	p := filepath.ToSlash(path)
-	if i := strings.IndexByte(p, '/'); i >= 0 {
-		return p[:i]
+// topDirs returns the first depth directory segments of a forward-slash path (the
+// directory containing the file, capped at depth). A file with fewer leading
+// directories than depth groups under its own directory; root-level files group
+// under ".". Depth below 1 is treated as 1.
+func topDirs(path string, depth int) string {
+	if depth < 1 {
+		depth = 1
 	}
-	return "."
+	p := filepath.ToSlash(path)
+	segments := strings.Split(p, "/")
+	if len(segments) <= 1 {
+		return "." // file at root, no directory
+	}
+	dirs := segments[:len(segments)-1] // drop the file name
+	if len(dirs) > depth {
+		dirs = dirs[:depth]
+	}
+	return strings.Join(dirs, "/")
 }

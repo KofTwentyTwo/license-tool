@@ -238,3 +238,20 @@ func TestRenderJSONSummaryGroupByCountsOnly(t *testing.T) {
 	assert.NotContains(t, first, "files") // counts only under summary
 	assert.NotContains(t, raw, "files")
 }
+
+func TestRenderDirectoryBreakdown(t *testing.T) {
+	r := optionsFixture() // src/a.go (MIT), src/b.go (no header)
+	textOut := renderToString(t, r, FormatText, RenderOptions{GroupBy: GroupDirectory})
+	assert.Contains(t, textOut, "source files by directory:")
+	assert.Contains(t, textOut, "licenses: ") // per-group breakdown line (non-license dim)
+
+	mdOut := renderToString(t, r, FormatMarkdown, RenderOptions{GroupBy: GroupDirectory})
+	assert.Contains(t, mdOut, "Licenses: ")
+
+	jsonOut := renderToString(t, r, FormatJSON, RenderOptions{GroupBy: GroupDirectory})
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &raw))
+	g := raw["groups"].([]any)[0].(map[string]any)
+	assert.Contains(t, g, "licenses")
+	assert.Contains(t, g, "risk")
+}

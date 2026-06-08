@@ -42,13 +42,13 @@ func sampleReport() model.Report {
 }
 
 func TestGroupFilesNone(t *testing.T) {
-	groups, skipped := GroupFiles(sampleReport(), GroupNone)
+	groups, skipped := GroupFiles(sampleReport(), GroupSpec{By: GroupNone})
 	assert.Empty(t, groups)
 	assert.Equal(t, 1, skipped)
 }
 
 func TestGroupFilesByLicense(t *testing.T) {
-	groups, skipped := GroupFiles(sampleReport(), GroupLicense)
+	groups, skipped := GroupFiles(sampleReport(), GroupSpec{By: GroupLicense})
 	assert.Equal(t, 1, skipped)
 	// Keys sorted: "(no-header)" < "AGPL-3.0-or-later" < "MIT".
 	require.Len(t, groups, 3)
@@ -64,7 +64,7 @@ func TestGroupFilesByLicense(t *testing.T) {
 }
 
 func TestGroupFilesByCategory(t *testing.T) {
-	groups, _ := GroupFiles(sampleReport(), GroupCategory)
+	groups, _ := GroupFiles(sampleReport(), GroupSpec{By: GroupCategory})
 	keys := map[string]int{}
 	for _, g := range groups {
 		keys[g.Key] = g.Count
@@ -79,7 +79,7 @@ func TestGroupFilesByType(t *testing.T) {
 		headered("a.go", "Go", "MIT"),
 		{Path: "weird", FileType: ""}, // non-skipped, no file type
 	}}
-	groups, _ := GroupFiles(r, GroupType)
+	groups, _ := GroupFiles(r, GroupSpec{By: GroupType})
 	keys := map[string]int{}
 	for _, g := range groups {
 		keys[g.Key] = g.Count
@@ -89,7 +89,7 @@ func TestGroupFilesByType(t *testing.T) {
 }
 
 func TestGroupFilesByDirectory(t *testing.T) {
-	groups, _ := GroupFiles(sampleReport(), GroupDirectory)
+	groups, _ := GroupFiles(sampleReport(), GroupSpec{By: GroupDirectory})
 	keys := map[string]int{}
 	for _, g := range groups {
 		keys[g.Key] = g.Count
@@ -103,7 +103,26 @@ func TestGroupFilesByDirectory(t *testing.T) {
 
 func TestGroupFilesDirectoryRoot(t *testing.T) {
 	r := model.Report{Files: []model.FileResult{headered("main.go", "Go", "MIT")}}
-	groups, _ := GroupFiles(r, GroupDirectory)
+	groups, _ := GroupFiles(r, GroupSpec{By: GroupDirectory})
 	require.Len(t, groups, 1)
 	assert.Equal(t, ".", groups[0].Key)
+}
+
+func TestTopDirs(t *testing.T) {
+	assert.Equal(t, ".", topDirs("main.go", 1))
+	assert.Equal(t, "src", topDirs("src/a.go", 1))
+	assert.Equal(t, "src", topDirs("src/sub/deep/a.go", 1))     // capped at depth 1
+	assert.Equal(t, "src/sub", topDirs("src/sub/deep/a.go", 2)) // depth 2
+	assert.Equal(t, "src", topDirs("src/a.go", 0))              // depth < 1 -> 1
+}
+
+func TestLicenseBreakdown(t *testing.T) {
+	files := []model.FileResult{
+		headered("a.go", "Go", "MIT"),
+		headered("b.go", "Go", "MIT"),
+		{Path: "c.go", FileType: "Go"}, // no header
+	}
+	got := licenseBreakdown(files)
+	assert.Equal(t, 2, got["MIT"])
+	assert.Equal(t, 1, got["(no-header)"])
 }
