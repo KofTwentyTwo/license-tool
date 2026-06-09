@@ -229,23 +229,30 @@ func ManageLicenseFiles(path string, cfg model.Config, opts Options) ([]model.Fi
 		return nil, err
 	}
 
-	return []model.FileResult{
-		writeManaged(path, "LICENSE", []byte(body), opts),
-		writeManaged(path, filepath.Join("LICENSES", cfg.License+".txt"), []byte(entry), opts),
-	}, nil
+	licenseFR, lerr := writeManaged(path, "LICENSE", []byte(body), opts)
+	if lerr != nil {
+		return nil, lerr
+	}
+	entryFR, eerr := writeManaged(path, filepath.Join("LICENSES", cfg.License+".txt"), []byte(entry), opts)
+	if eerr != nil {
+		return nil, eerr
+	}
+	return []model.FileResult{licenseFR, entryFR}, nil
 }
 
 // writeManaged computes the action/diff for a managed whole-file (LICENSE or a
-// LICENSES entry) and, on --write, atomically writes it. It never errors the run;
-// a write failure is recorded on the result so one bad path does not abort apply.
-func writeManaged(root, rel string, want []byte, opts Options) model.FileResult {
+// LICENSES entry) and, on --write, atomically writes it. A symlinked target is a hard
+// refusal returned as an error so the CLI reports a write refusal rather than
+// clobbering the link into a regular file; every other write failure is recorded on
+// the result (and not returned) so one bad path does not abort the whole run.
+func writeManaged(root, rel string, want []byte, opts Options) (model.FileResult, error) {
 	abs := filepath.Join(root, rel)
 	fr := model.FileResult{Path: rel, FileType: "license", Action: "none"}
 
 	existing, rerr := os.ReadFile(abs)
 	switch {
 	case rerr == nil && string(existing) == string(want):
-		return fr
+		return fr, nil
 	case rerr == nil:
 		fr.Action = "replace"
 	default:
@@ -259,13 +266,16 @@ func writeManaged(root, rel string, want []byte, opts Options) model.FileResult 
 	if opts.Write {
 		if mkerr := os.MkdirAll(filepath.Dir(abs), 0o755); mkerr != nil {
 			fr.Err = mkerr.Error()
-			return fr
+			return fr, nil
 		}
 		if werr := AtomicWrite(abs, want); werr != nil {
+			if errors.Is(werr, errSymlinkTarget) {
+				return fr, werr
+			}
 			fr.Err = werr.Error()
 		}
 	}
-	return fr
+	return fr, nil
 }
 
 // tmpWrite, tmpClose, and chmodFn are seams over the temp-file write/close and the
@@ -278,12 +288,23 @@ var (
 	chmodFn  = os.Chmod
 )
 
+// errSymlinkTarget is returned when a write target is itself a symlink. Its message
+// contains "refusing to write" so the CLI's isWriteRefusal mapping classifies it as a
+// write refusal (exit code 3) rather than a generic internal error.
+var errSymlinkTarget = errors.New("applier: refusing to write through a symlink")
+
 // AtomicWrite writes content to path via a temp-file-then-rename so a crash never
-// leaves a half-written source file. It preserves the original file mode.
+// leaves a half-written source file. It preserves the original file mode. If path is
+// itself a symlink it refuses rather than clobbering the link: os.Rename would replace
+// the symlink with a regular file, silently breaking a deliberate link such as
+// LICENSE -> LICENSES/MIT.txt.
 func AtomicWrite(path string, content []byte) error {
 	dir := filepath.Dir(path)
 	mode := os.FileMode(0o644)
-	if fi, err := os.Stat(path); err == nil {
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: %s", errSymlinkTarget, path)
+		}
 		mode = fi.Mode().Perm()
 	}
 

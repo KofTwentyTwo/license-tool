@@ -328,6 +328,41 @@ func TestAtomicWriteChmodError(t *testing.T) {
 	require.ErrorIs(t, err, boom)
 }
 
+// TestAtomicWriteRefusesSymlink confirms AtomicWrite refuses to replace a target
+// that is a symlink (e.g. LICENSE -> LICENSES/MIT.txt) rather than clobbering it
+// into a regular file. The link must be left intact and its target untouched.
+func TestAtomicWriteRefusesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation is restricted on windows")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "LICENSES", "MIT.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(target, []byte("original target\n"), 0o644))
+
+	link := filepath.Join(dir, "LICENSE")
+	require.NoError(t, os.Symlink(target, link))
+
+	err := AtomicWrite(link, []byte("clobbered\n"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to write", "refusal must match the write-refusal exit-code mapping")
+	assert.ErrorIs(t, err, errSymlinkTarget)
+
+	// The symlink itself must survive as a symlink.
+	fi, lerr := os.Lstat(link)
+	require.NoError(t, lerr)
+	assert.NotZero(t, fi.Mode()&os.ModeSymlink, "LICENSE must still be a symlink")
+
+	// The link target must be unchanged (not clobbered through the link).
+	got, rerr := os.ReadFile(target)
+	require.NoError(t, rerr)
+	assert.Equal(t, "original target\n", string(got))
+
+	dest, rlerr := os.Readlink(link)
+	require.NoError(t, rlerr)
+	assert.Equal(t, target, dest, "link destination must be unchanged")
+}
+
 // --- ApplyFile ------------------------------------------------------------
 
 // agplHeaderFunc returns a HeaderRenderFunc that renders the canonical AGPL header
@@ -588,7 +623,8 @@ func TestWriteManagedMkdirError(t *testing.T) {
 	// "LICENSES" exists as a FILE, so MkdirAll(LICENSES) fails for the entry write.
 	require.NoError(t, os.WriteFile(filepath.Join(root, "LICENSES"), []byte("x"), 0o644))
 
-	fr := writeManaged(root, filepath.Join("LICENSES", "AGPL-3.0-or-later.txt"), []byte("body"), Options{Write: true})
+	fr, err := writeManaged(root, filepath.Join("LICENSES", "AGPL-3.0-or-later.txt"), []byte("body"), Options{Write: true})
+	require.NoError(t, err)
 	assert.NotEmpty(t, fr.Err)
 }
 
@@ -609,8 +645,56 @@ func TestWriteManagedWriteError(t *testing.T) {
 	require.NoError(t, os.Mkdir(roDir, 0o555))
 	t.Cleanup(func() { _ = os.Chmod(roDir, 0o755) })
 
-	fr := writeManaged(roDir, "LICENSE", []byte("body"), Options{Write: true})
+	fr, err := writeManaged(roDir, "LICENSE", []byte("body"), Options{Write: true})
+	require.NoError(t, err)
 	assert.NotEmpty(t, fr.Err)
+}
+
+// TestWriteManagedRefusesSymlink confirms the managed license-file write path
+// surfaces a symlinked target as a returned refusal (so the CLI exit-code mapping
+// reports a write refusal) rather than silently clobbering the link.
+func TestWriteManagedRefusesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation is restricted on windows")
+	}
+	root := t.TempDir()
+	target := filepath.Join(root, "LICENSES", "AGPL-3.0-or-later.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(target, []byte("real license text\n"), 0o644))
+	require.NoError(t, os.Symlink(target, filepath.Join(root, "LICENSE")))
+
+	_, err := ManageLicenseFiles(root, agplConfig(), Options{Write: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to write")
+	assert.ErrorIs(t, err, errSymlinkTarget)
+
+	// The symlink and its target must be untouched.
+	fi, lerr := os.Lstat(filepath.Join(root, "LICENSE"))
+	require.NoError(t, lerr)
+	assert.NotZero(t, fi.Mode()&os.ModeSymlink)
+	got, rerr := os.ReadFile(target)
+	require.NoError(t, rerr)
+	assert.Equal(t, "real license text\n", string(got))
+}
+
+// TestLicenseRefusesSymlinkTarget confirms the refusal propagates through the
+// public License entry point, where the CLI maps it to the write-refused exit code.
+func TestLicenseRefusesSymlinkTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation is restricted on windows")
+	}
+	root := t.TempDir()
+	gitInit(t, root)
+	writeFile(t, root, "main.go", "package main\n")
+	gitAddCommit(t, root)
+	target := filepath.Join(root, "LICENSES", "AGPL-3.0-or-later.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(target, []byte("real license text\n"), 0o644))
+	require.NoError(t, os.Symlink(target, filepath.Join(root, "LICENSE")))
+
+	_, err := License(root, agplConfig(), Options{Write: true, AllowDirty: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to write")
 }
 
 // --- Apply: validation and dry-run ----------------------------------------
