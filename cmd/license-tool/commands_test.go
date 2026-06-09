@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -826,6 +827,31 @@ func TestLicenseCommand(t *testing.T) {
 		assert.Contains(t, err.Error(), "dirty git tree")
 		_, statErr := os.Stat(filepath.Join(dir, "LICENSE"))
 		assert.True(t, os.IsNotExist(statErr))
+	})
+
+	t.Run("symlinked LICENSE is refused with the write-refused exit code", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation is restricted on windows")
+		}
+		dir := fixtureDir(t)
+		initGitRepo(t, dir)
+		target := filepath.Join(dir, "LICENSES", "AGPL-3.0-or-later.txt")
+		require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+		require.NoError(t, os.WriteFile(target, []byte("real license text\n"), 0o644))
+		require.NoError(t, os.Symlink(target, filepath.Join(dir, "LICENSE")))
+
+		_, err := runRoot(t, "license", dir, "--write", "--allow-dirty")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "refusing to write")
+		assert.Equal(t, exitWriteRefused, exitCode(err), "symlink refusal must map to the write-refused exit code")
+
+		// The link survives as a link and its target is untouched.
+		fi, lerr := os.Lstat(filepath.Join(dir, "LICENSE"))
+		require.NoError(t, lerr)
+		assert.NotZero(t, fi.Mode()&os.ModeSymlink)
+		got, rerr := os.ReadFile(target)
+		require.NoError(t, rerr)
+		assert.Equal(t, "real license text\n", string(got))
 	})
 
 	t.Run("commit flags create scoped license-file commit", func(t *testing.T) {
