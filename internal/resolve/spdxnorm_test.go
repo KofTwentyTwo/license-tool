@@ -4,6 +4,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/KofTwentyTwo/license-tool/internal/model"
+	"github.com/KofTwentyTwo/license-tool/internal/policy"
 )
 
 // TestValidateSingleSPDXValidateFailure covers validateSingleSPDX's
@@ -43,16 +46,41 @@ func TestNormalizeSPDX(t *testing.T) {
 		{"alias the apache software license", "The Apache Software License, Version 2.0", "Apache-2.0", true},
 		{"alias mit license", "MIT License", "MIT", true},
 		{"alias bsd 3-clause", "New BSD License", "BSD-3-Clause", true},
-		{"alias eclipse 2.0", "Eclipse Public License 2.0", "EPL-2.0", true},
 		{"alias agpl", "GNU Affero General Public License v3.0 or later", "AGPL-3.0-or-later", true},
 		{"compound expression rejected", "MIT OR Apache-2.0", "", false},
 		{"unrecognized string", "Totally Made Up License", "", false},
+		// Ambiguous aliases must NOT be guessed: a bare "BSD" cannot pick a clause
+		// count and a bare LGPL name cannot pick a version/grant. They stay unresolved.
+		{"ambiguous bsd no clause count", "BSD", "", false},
+		{"ambiguous bsd license no clause count", "BSD License", "", false},
+		{"ambiguous lgpl no version or grant", "GNU Lesser General Public License", "", false},
+		// Non-curated targets must NOT resolve: EPL ids pass spdx.Validate but are
+		// outside the curated rendering set, so policy.Classify would return Unknown,
+		// a resolved-but-unclassifiable contradiction. They stay unresolved.
+		{"non-curated epl 2.0", "Eclipse Public License 2.0", "", false},
+		{"non-curated epl 1.0", "Eclipse Public License 1.0", "", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			id, ok := normalizeSPDX(tc.raw)
 			assert.Equal(t, tc.wantOK, ok)
 			assert.Equal(t, tc.wantID, id)
+		})
+	}
+}
+
+// TestSPDXAliasesAreCuratedAndClassifiable asserts every alias-table target is a
+// curated SPDX id that policy.Classify can classify (never Unknown). This guards the
+// invariant that a "resolved" dependency is always classifiable: an alias that mapped
+// to a valid-but-uncurated id (e.g. EPL-*) would be resolved-but-unclassifiable.
+func TestSPDXAliasesAreCuratedAndClassifiable(t *testing.T) {
+	for alias, id := range spdxAliases {
+		t.Run(alias, func(t *testing.T) {
+			gotID, ok := normalizeSPDX(alias)
+			assert.True(t, ok, "alias %q must resolve", alias)
+			assert.Equal(t, id, gotID)
+			assert.NotEqual(t, model.CategoryUnknown, policy.Classify(gotID),
+				"alias %q maps to %q which is not classifiable (not in the curated set)", alias, gotID)
 		})
 	}
 }
