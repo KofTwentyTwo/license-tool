@@ -29,10 +29,30 @@ GH-29 and GH-35 are independent (touch different code); both branch from `develo
 - Three-agent adversarial review of the delta (`bbba9d2..HEAD`); findings addressed: the `--only` risk-distortion contract, cross-platform `path.Base`, and several coverage-of-intent test gaps (directory-group escalation, incompat-vs-headerless precedence, `incompatibleIDs` cardinality, nested/`--only` config exclusion, no detected-license leak, `check` exit-code regression guard).
 - Docs: README (policy-aware risk, config exclusion, corrected grouped-output samples + JSON group shape), CHANGELOG `[Unreleased]`, DESIGN addenda recording the three by-decision resolutions.
 
+## Open PRs into `develop` (all CI-green; none merged — awaiting author review)
+| PR | Issue | Branch | Summary |
+|----|-------|--------|---------|
+| #36 | #35 | feature/GH-35-audit-summary-reports | Audit reporting overhaul + self-config exclusion + policy-aware risk |
+| #37 | #29 | feature/GH-29-init-tui-wizard | Init full TUI wizard + live preview |
+| #38 | #31 | feature/GH-31-spdxnorm-no-guess | Stop guessing SPDX ids for ambiguous aliases (resolve to unresolved) |
+| #39 | #34 | feature/GH-34-quiet-verbose-flags | Remove no-op `--quiet`/`--verbose` flags (Option B; isWriteRefusal LOW deferred) |
+| #40 | #33 | feature/GH-33-symlink-license | Refuse to clobber a symlinked LICENSE (exit 3) |
+| #41 | #30 | feature/GH-30-detect-overmatch | Confine header detection to contiguous comment lines; SPDX tag must start a line |
+
+All six branch from `develop` and are independent. Bug fixes #38–#41 were done by
+parallel worktree-isolated agents, each TDD + full gate (100% coverage) + own PR.
+
 ## Other Open Threads
-- [ ] PRs are open into `develop` for #29 and #35 — awaiting review/merge by the author.
-- [ ] GH-29 commit `bafa281` bundled planning docs (CLAUDE.md/DESIGN/PLAN/review) via `git add -A` — optional history tidy; not done (no autonomous history rewrite).
-- [ ] Independent review bugs still untouched: #30 (detect over-match), #31 (spdxnorm guessing), #33 (symlink LICENSE), #34 (no-op --quiet/--verbose). #32 (include `**`) was fixed on GH-29.
+- [ ] Review/merge the six PRs above (independent; flexible order). Resolve CHANGELOG `[Unreleased]` conflicts at merge time — each branch added its own entry.
+- [ ] GH-29 commit `bafa281` bundled planning docs via `git add -A` — optional history tidy; not done (no autonomous history rewrite).
+- [ ] Deferred LOW items flagged in PRs: #41 block-comment de-stacking (left to avoid over-detection); #39 `isWriteRefusal` typed-sentinel refactor (deferred to avoid colliding with #40's applier changes) and the still-dead `model.ResolveOptions.Verbose` field.
+- [ ] #32 (include `**`) was fixed on GH-29.
+
+## Judgment calls made autonomously (worth a glance during review)
+- #41: SPDX-tag detection now requires the tag at the start of a comment line (mid-prose mention no longer matches) — intentional under prefer-under-detection.
+- #38: kept `gnu affero general public license v3.0 or later` alias (pins version+grant, curated id); alias validation switched from `spdx.Validate` to `spdx.Lookup` so "resolved" implies classifiable.
+- #39: removed the flags rather than wiring hollow behavior.
+- #40: refuses (does not dereference) a symlinked license target; an already-matching symlink still reports `action: none`.
 
 ## Key Reference
 - Issues: #29 (init TUI), #35 (audit reports); bugs #30/#31/#33/#34.
