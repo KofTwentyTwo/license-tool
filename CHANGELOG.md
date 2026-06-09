@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- Removed the no-op `--quiet`/`-q` and `--verbose`/`-v` persistent flags. They were bound but never read, so they advertised behavior they never delivered; the CLI has no non-essential output to suppress and no diagnostic stream to emit. Passing them now produces a usage error (exit 2).
+
 ## [0.3.0] - 2026-06-04
 
 ### Install

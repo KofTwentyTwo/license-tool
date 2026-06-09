@@ -20,7 +20,7 @@ license-tool init    [path]   # Scaffold a .license-tool.yaml (interactive on a 
 license-tool version          # Version, commit, build date
 ```
 
-Shared flags: `--config <file>`, `--include <glob>` (repeatable), `--exclude <glob>` (repeatable), `--no-gitignore`, `--quiet|-q`, `--verbose|-v`.
+Shared flags: `--config <file>`, `--include <glob>` (repeatable), `--exclude <glob>` (repeatable), `--no-gitignore`.
 
 `audit` / `check` flags: `--format text|json|markdown` (default `text`; `check` forces machine-friendly), `--output <file>`, `--deps|--no-deps` (default on), `--resolve-deps ondisk|tool|off` (default `ondisk`), `--fail-on <conditions>` (check only; default `missing-header,unknown-license,policy-violation`).
 
