@@ -198,6 +198,18 @@ For more information, please refer to <http://unlicense.org/>`
 			ft:          lineFT(),
 			wantPresent: false,
 		},
+		{
+			// SAFETY (issue #30): a comment that merely MENTIONS the SPDX tag mid-prose
+			// (not on its own comment line) is documentation about the tag, not a managed
+			// header. It must NOT be treated as a license header, or apply would rewrite a
+			// real doc comment.
+			name: "SPDX tag mentioned mid-prose is not a managed header",
+			content: "// To mark a file's license, add an SPDX-License-Identifier: MIT line\n" +
+				"// near the top of the file. This helper documents that convention.\n" +
+				"\npackage widget\n",
+			ft:          lineFT(),
+			wantPresent: false,
+		},
 	}
 
 	for _, tc := range tests {
@@ -231,6 +243,30 @@ func TestDetectSpanCoversCommentRegion(t *testing.T) {
 	assert.Equal(t, 0, got.StartByte)
 	// Span ends after the blank line, at "package".
 	assert.Equal(t, "package main\n", string(content[got.EndByte:]))
+}
+
+// TestDetectExcludesDocCommentBelowBlankLine is the issue #30 regression guard at the
+// Detect level: a managed header, a truly-blank line, then an unrelated file doc
+// comment must yield a span that covers ONLY the header (through the blank separator),
+// never the doc comment below. Absorbing the doc comment would make apply delete it on
+// relicense/year-refresh.
+func TestDetectExcludesDocCommentBelowBlankLine(t *testing.T) {
+	docComment := "// Package widget renders widgets for the dashboard.\n"
+	content := []byte("// " + Sentinel + "\n" +
+		"// SPDX-License-Identifier: MIT\n" +
+		"\n" +
+		docComment +
+		"// It exposes a single Render entry point.\n" +
+		"\npackage widget\n")
+
+	got, err := Detect(content, lineFT())
+	require.NoError(t, err)
+	require.True(t, got.Present)
+	assert.Equal(t, 0, got.StartByte)
+	// The span ends at the blank separator; the doc comment is wholly outside it.
+	rest := string(content[got.EndByte:])
+	assert.Equal(t, docComment+"// It exposes a single Render entry point.\n\npackage widget\n", rest)
+	assert.NotContains(t, string(content[got.StartByte:got.EndByte]), "renders widgets")
 }
 
 // TestDetectPreserveBoundaryError covers Detect's preserve-boundary error guard via
@@ -541,7 +577,29 @@ func TestLeadingCommentRegionLine(t *testing.T) {
 	cs := model.CommentStyle{Block: false, LinePrefix: "// "}
 	ft := model.FileType{CommentStyle: cs}
 
-	t.Run("run of comment lines with tolerated blank between", func(t *testing.T) {
+	// SAFETY (issue #30): a truly-blank line ENDS the leading comment run. WHY: a
+	// blank line between a license header and a following file doc comment is a hard
+	// boundary; absorbing the doc comment into the header span made apply delete it on
+	// relicense/year-refresh. Our own rendered headers never contain a truly-blank
+	// internal line (separator lines are emitted as a bare prefix, e.g. "#"/"//"), so
+	// stopping at the blank under-detects nothing we wrote and protects foreign
+	// comments below the header.
+	t.Run("truly blank line ends the region (doc comment below is excluded)", func(t *testing.T) {
+		content := []byte("// header part A\n\n// unrelated doc comment\ncode\n")
+		s, e, text, ok := leadingCommentRegion(content, 0, ft)
+		require.True(t, ok)
+		assert.Equal(t, 0, s)
+		// The blank separator is folded into the header span (it round-trips with our
+		// own rendered trailing blank), and the doc comment below it is wholly outside.
+		assert.Equal(t, "// unrelated doc comment\ncode\n", string(content[e:]))
+		assert.Contains(t, text, "part A")
+		assert.NotContains(t, text, "unrelated doc comment")
+	})
+
+	// A bare-prefix line ("//" with no body) is still a comment line, not a blank, so
+	// it does NOT end the run. This is exactly the shape our renderer emits for the
+	// separator between REUSE tags and the notice block, so it must stay in-region.
+	t.Run("bare prefix separator line stays in the region", func(t *testing.T) {
 		content := []byte("// line one\n//\n// line three\nbody\n")
 		s, e, text, ok := leadingCommentRegion(content, 0, ft)
 		require.True(t, ok)
@@ -549,15 +607,6 @@ func TestLeadingCommentRegionLine(t *testing.T) {
 		assert.Equal(t, "body\n", string(content[e:]))
 		assert.Contains(t, text, "line one")
 		assert.Contains(t, text, "line three")
-	})
-
-	t.Run("blank line then comment is still one region", func(t *testing.T) {
-		content := []byte("// header part A\n\n// header part B\ncode\n")
-		_, e, text, ok := leadingCommentRegion(content, 0, ft)
-		require.True(t, ok)
-		assert.Equal(t, "code\n", string(content[e:]))
-		assert.Contains(t, text, "part A")
-		assert.Contains(t, text, "part B")
 	})
 
 	t.Run("non-comment line ends the run", func(t *testing.T) {
@@ -618,6 +667,22 @@ func TestSpdxIdentifierTag(t *testing.T) {
 			name:   "multi-license expression returned as-is",
 			text:   "spdx-license-identifier: (MIT OR Apache-2.0)\n",
 			wantID: "(MIT OR Apache-2.0)",
+			wantOK: true,
+		},
+		{
+			// SAFETY (issue #30): the tag must sit at the START of a comment line. A
+			// mention buried mid-prose is documentation about the tag, not a managed
+			// header, and must not qualify.
+			name:   "tag mentioned mid-prose does not qualify",
+			text:   "add an SPDX-License-Identifier: MIT line near the top",
+			wantOK: false,
+		},
+		{
+			// Leading whitespace before the tag on its own line is allowed (comment
+			// bodies may be indented); it still counts as own-line.
+			name:   "tag on its own line with leading whitespace qualifies",
+			text:   "Copyright 2026 Acme\n   SPDX-License-Identifier: MIT\n",
+			wantID: "MIT",
 			wantOK: true,
 		},
 		{
