@@ -1,21 +1,15 @@
-# TODO: GH-29 Init TUI Wizard
+# TODO
 
-## Definition
-- [x] Define full feature specification and MVP boundaries.
-- [x] Update issue #29 with implementation plan once finalized.
+## Shipped in v0.4.0 (2026-06-09)
+- [x] #35 audit reporting overhaul + self-config exclusion + policy-aware group risk
+- [x] #29 init full TUI wizard + live previews + persisted `include`
+- [x] #31 resolve: stop guessing SPDX ids for ambiguous aliases
+- [x] #34 remove no-op `--quiet`/`--verbose` flags
+- [x] #33 refuse to clobber a symlinked LICENSE
+- [x] #30 confine header detection to contiguous comment lines
 
-## Implementation
-- [x] Persist `include` patterns in `.license-tool.yaml`.
-- [x] Add init wizard sample-language catalog and C fallback.
-- [x] Add live preview rendering for example source files.
-- [x] Replace interactive `init` form with full-screen TUI.
-- [x] Preserve deterministic non-TTY `init` behavior.
-- [x] Update README/DEVELOPERS documentation.
-
-## Verification
-- [x] `gofmt -l .`
-- [x] `go vet ./...`
-- [x] `golangci-lint run`
-- [x] `go test ./... -race -coverpkg=./internal/...,./cmd/... -covermode=atomic -coverprofile=cover.out`
-- [x] `go run github.com/vladopajic/go-test-coverage/v2@v2.18.8 --config=.testcoverage.yml`
-- [x] `go build ./...`
+## Follow-ups (not yet ticketed)
+- [ ] Prune merged `feature/GH-*` branches (local + remote).
+- [ ] Detect: de-stack multi-block `/* */` headers (deferred from #30; would need care to avoid over-detection).
+- [ ] cmd/applier: replace `isWriteRefusal` substring matching with a typed sentinel error (deferred from #34 to avoid colliding with #33).
+- [ ] model: remove the dead `ResolveOptions.Verbose` field (deferred from #34).

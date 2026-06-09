@@ -3,30 +3,27 @@
 **Last Updated:** 2026-06-09
 
 ## Current Status
-Releasing **v0.4.0**. All six feature/bugfix branches were integrated into `develop`
-(six `--no-ff` merges, conflicts resolved, combined gate green: gofmt/vet/lint, race
-tests, 100% coverage). CHANGELOG finalized as `[0.4.0] - 2026-06-09`. Promoting
-`develop` → `main` and tagging `v0.4.0` to trigger the GoReleaser `Release` workflow.
+**v0.4.0 is RELEASED and verified.** Nothing in progress. Clean stopping point.
+Resume on `develop` (default branch). Working tree clean.
 
-## What shipped in v0.4.0 (issues closed)
-- #35 audit reporting overhaul (`--summary`, `--group-by`, `--sort`, `--depth`, `--only`, per-group risk + breakdowns, attributable violations, findings parity) + self-config exclusion + policy-aware group risk.
-- #29 init full TUI wizard + live previews + persisted `include`.
-- #31 resolve: stop guessing SPDX ids for ambiguous aliases.
-- #34 remove no-op `--quiet`/`--verbose` flags.
-- #33 refuse to clobber a symlinked LICENSE.
-- #30 confine header detection to contiguous comment lines.
+## What Was Done (this session)
+- Shipped six issues into v0.4.0: #35 (audit reporting overhaul + self-config exclusion + policy-aware group risk), #29 (init full TUI wizard), #31 (resolve: stop guessing SPDX ids), #34 (remove no-op --quiet/--verbose), #33 (refuse symlinked LICENSE), #30 (confine header detection).
+- Bug fixes #30/#31/#33/#34 were built by parallel worktree-isolated agents (TDD + full gate + PR each).
+- Integrated all six PRs into `develop` (six --no-ff merges, conflicts resolved), combined gate green (100% coverage), promoted `develop` -> `main`, tagged **v0.4.0**.
+- Release workflow succeeded: GitHub Release v0.4.0 (6 assets: checksums + darwin/linux arm64+amd64 + windows amd64), Homebrew cask bumped on `KofTwentyTwo/homebrew-tap`.
+- Authored `RELEASES.md` (full release runbook); added pointer from `RELEASING.md`.
 
-## Release process
-Documented end-to-end in `RELEASES.md` (full runbook) and `RELEASING.md` (short ref).
-Tag `vX.Y.Z` on `main` triggers `goreleaser release --clean`: GitHub Release + Homebrew
-cask (`KofTwentyTwo/homebrew-tap`). Verify with `gh release view` and
-`brew install --cask KofTwentyTwo/tap/license-tool && license-tool version`.
+## Branch State
+- `develop` and `main` both at v0.4.0 content; `main` tagged `v0.4.0`. `develop` is one doc commit (this handoff) ahead of `main` after it lands.
+- Six merged local `feature/GH-*` branches remain and can be pruned (`git branch -d ...`); their remotes can be deleted too.
 
-## Open Threads / follow-ups
-- [ ] Deferred LOW items: #41/#30 block-comment de-stacking; #39/#34 `isWriteRefusal` typed-sentinel refactor and the still-dead `model.ResolveOptions.Verbose` field.
-- [ ] #32 (include `**`) was fixed on GH-29.
+## Pending / Next Session
+- [ ] Prune merged feature branches (local + remote) if desired.
+- [ ] Verify install on a clean machine: `brew update && brew install --cask KofTwentyTwo/tap/license-tool && license-tool version` (should print v0.4.0).
+- [ ] Deferred LOW follow-ups (own issues if pursued): block-comment de-stacking in detect (#30 scope); `isWriteRefusal` typed-sentinel refactor + remove dead `model.ResolveOptions.Verbose` (#34 scope).
+- [ ] No open issues/PRs outstanding from this work.
 
 ## Key Reference
-- Default branch `develop`; production `main`; tags `vX.Y.Z` on `main` publish via GoReleaser.
-- Gate: `gofmt -l .`; `go vet ./...`; `golangci-lint run`; `go test ./... -race -coverpkg=./internal/...,./cmd/... -covermode=atomic -coverprofile=cover.out`; `go run github.com/vladopajic/go-test-coverage/v2@v2.18.8 --config=.testcoverage.yml`. (Do not pipe `go build`/`go test` to `tail` — it masks the exit code.)
-- Repo: GitHub `KofTwentyTwo/license-tool`; commits reference issues, no AI attribution.
+- Repo: GitHub `KofTwentyTwo/license-tool`. Default branch `develop`; production `main`; tag `vX.Y.Z` on `main` publishes via GoReleaser. Commits reference issues, no AI attribution.
+- Release runbook: `RELEASES.md`. Gate: `gofmt -l .`; `go vet ./...`; `golangci-lint run`; `go test ./... -race -coverpkg=./internal/...,./cmd/... -covermode=atomic -coverprofile=cover.out`; `go run github.com/vladopajic/go-test-coverage/v2@v2.18.8 --config=.testcoverage.yml`.
+- Gotcha: never pipe `go build`/`go test` to `tail` in a `&&` chain — it masks the exit code (bit me during merge integration). The Go filetype uses BLOCK comments (`/* */`), not `//`.
