@@ -76,6 +76,22 @@ func phpFileType() model.FileType {
 	}
 }
 
+// pyFileType returns a "# " line-comment Python file type. It is used to exercise the
+// issue #30 regression: a line-comment header followed by a blank line then a foreign
+// doc comment must not absorb (and therefore must not delete) that doc comment.
+func pyFileType() model.FileType {
+	return model.FileType{
+		Name:         "Python",
+		Extensions:   []string{".py"},
+		CommentStyle: model.CommentStyle{Block: false, LinePrefix: "# "},
+		PreserveFirst: []model.PreserveRule{
+			{Kind: model.PreserveBOM, Before: false},
+			{Kind: model.PreserveShebang, Before: false},
+			{Kind: model.PreserveCodingPragma, Before: false},
+		},
+	}
+}
+
 // agplConfig is the canonical apply config: AGPL, reuse+notice, an explicit year so
 // the rendered header is deterministic and independent of the wall clock.
 func agplConfig() model.Config {
@@ -411,6 +427,67 @@ func TestApplyFile(t *testing.T) {
 		assert.Empty(t, diff2)
 		assert.Equal(t, once, twice)
 	})
+}
+
+// lookupLicense fetches a curated license by id or fails the test. Local to these
+// tests to avoid depending on a sibling package's test helper.
+func lookupLicense(t *testing.T, id string) model.License {
+	t.Helper()
+	lic, ok := spdx.Lookup(id)
+	require.True(t, ok, "license %q must be in the curated set", id)
+	return lic
+}
+
+// TestApplyFilePreservesDocCommentBelowBlankLine is the issue #30 end-to-end safety
+// guard. A line-comment file carrying a managed header, a blank line, then an unrelated
+// file doc comment must keep that doc comment intact across a relicense: the detected
+// span covers only the header, so the replace swaps only the header bytes.
+func TestApplyFilePreservesDocCommentBelowBlankLine(t *testing.T) {
+	ft := pyFileType()
+
+	// Step 1: insert an MIT header into a file whose body opens with a doc comment.
+	mitFunc := func(f model.FileType) (string, error) {
+		return render.Header(render.HeaderInput{
+			License:  lookupLicense(t, "MIT"),
+			Holder:   "Acme Corp",
+			Year:     "2024",
+			Style:    model.StyleReuse,
+			FileType: f,
+		})
+	}
+	body := "# This module wires the dashboard widgets together.\n" +
+		"# It is intentionally documented at the top of the file.\n" +
+		"\n" +
+		"def main():\n    pass\n"
+	withHeader, _, action, err := ApplyFile([]byte(body), ft, mitFunc)
+	require.NoError(t, err)
+	require.Equal(t, "insert", action)
+	require.Contains(t, string(withHeader), "SPDX-License-Identifier: MIT")
+	require.Contains(t, string(withHeader), "wires the dashboard widgets",
+		"the foreign doc comment must be present after insert")
+
+	// Step 2: relicense to Apache-2.0. This replaces the detected header span.
+	apacheFunc := func(f model.FileType) (string, error) {
+		return render.Header(render.HeaderInput{
+			License:  lookupLicense(t, "Apache-2.0"),
+			Holder:   "Acme Corp",
+			Year:     "2026",
+			Style:    model.StyleReuse,
+			FileType: f,
+		})
+	}
+	relicensed, _, action2, err := ApplyFile(withHeader, ft, apacheFunc)
+	require.NoError(t, err)
+	require.Equal(t, "replace", action2)
+
+	got := string(relicensed)
+	assert.Contains(t, got, "SPDX-License-Identifier: Apache-2.0", "new license written")
+	assert.NotContains(t, got, "SPDX-License-Identifier: MIT", "old license id removed")
+	// The safety-critical assertion: the foreign doc comment survives the relicense.
+	assert.Contains(t, got, "# This module wires the dashboard widgets together.",
+		"the doc comment below the blank line must survive a relicense")
+	assert.Contains(t, got, "# It is intentionally documented at the top of the file.")
+	assert.Contains(t, got, "def main():")
 }
 
 func TestApplyFileIdempotentAfterPreserveFirstConstructs(t *testing.T) {

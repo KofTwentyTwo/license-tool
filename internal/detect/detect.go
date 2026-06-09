@@ -89,11 +89,12 @@ var curatedFingerprints = []struct {
 // reports presence, the byte span, the matched SPDX id / holder / year if any, and
 // whether the match came via the sentinel.
 //
-// The span (StartByte inclusive, EndByte exclusive) covers exactly the leading
-// comment block(s) recognized as a license header, including any blank lines between
-// adjacent comment blocks but excluding the preserve-first prefixes and the file
-// content that follows. When no header is found, Present is false and the offsets
-// are zero.
+// The span (StartByte inclusive, EndByte exclusive) covers exactly the contiguous
+// leading comment recognized as a license header, plus its trailing blank-line
+// separator, but excluding the preserve-first prefixes and the file content that
+// follows. A blank line inside the leading region ends it, so a foreign doc comment
+// below a blank separator is never absorbed. When no header is found, Present is false
+// and the offsets are zero.
 func Detect(content []byte, ft model.FileType) (model.DetectedHeader, error) {
 	// Uncommentable types (JSON and friends) can never carry a header; report absence
 	// rather than risk matching incidental text.
@@ -200,8 +201,8 @@ func FingerprintLicense(headerText string) (string, bool) {
 // leadingCommentRegion finds the contiguous comment block(s) at offset start and
 // returns their byte span plus the extracted comment text (delimiters stripped,
 // joined by newlines). For block-comment types it spans the first block comment; for
-// line-comment types it spans the run of consecutive comment lines (blank lines
-// between comment lines are included so a header split by a blank line is one region).
+// line-comment types it spans the run of CONTIGUOUS comment lines (a truly-blank line
+// ends the run -- see lineCommentRegion for the issue #30 safety rationale).
 //
 // The bool is false when there is no comment at start, in which case no header is
 // possible. Leading blank lines before the comment are tolerated and included in the
@@ -283,10 +284,22 @@ func blockCommentRegion(content []byte, start int, cs model.CommentStyle) (int, 
 	return openOffset, end, stripBlockInner(inner), true
 }
 
-// lineCommentRegion spans the run of consecutive line comments (each beginning with
-// the LinePrefix, ignoring leading whitespace) starting at start, tolerating blank
-// lines between comment lines, and returns the joined comment text with prefixes
-// stripped. The run ends at the first non-blank, non-comment line.
+// lineCommentRegion spans the run of CONTIGUOUS line comments (each beginning with
+// the LinePrefix, ignoring leading whitespace) starting at start, and returns the
+// joined comment text with prefixes stripped. The run ends at the first line that is
+// neither a comment line nor empty -- and, critically, a truly-blank line ALSO ends
+// the run.
+//
+// WHY a blank line ends the run (issue #30, safety-critical): a blank line between a
+// license header and a following file doc comment is a hard boundary. Earlier this
+// function tolerated blank lines between comment lines, so "header / blank / doc
+// comment" collapsed into one detected span; apply then deleted the doc comment on
+// relicense/year-refresh. Our own rendered headers never contain a truly-blank
+// internal line -- the renderer emits separator lines as a bare prefix (e.g. "#" or
+// "//"), which is still a comment line and stays in-region -- so confining the region
+// to contiguous comment lines is byte-idempotent for headers we write while refusing
+// to absorb a foreign comment that a blank line has separated from the header. When in
+// doubt we under-detect (leave the foreign comment alone) rather than over-detect.
 func lineCommentRegion(content []byte, start int, cs model.CommentStyle) (int, int, string, bool) {
 	prefix := strings.TrimRight(cs.LinePrefix, " \t")
 	if prefix == "" {
@@ -296,7 +309,6 @@ func lineCommentRegion(content []byte, start int, cs model.CommentStyle) (int, i
 	pos := start
 	end := start
 	var lines []string
-	pendingBlank := 0
 	sawComment := false
 
 	for pos < len(content) {
@@ -305,26 +317,16 @@ func lineCommentRegion(content []byte, start int, cs model.CommentStyle) (int, i
 		body := strings.TrimRight(raw, "\r\n")
 		trimmed := strings.TrimLeft(body, " \t")
 
-		switch {
-		case strings.HasPrefix(trimmed, prefix):
-			// A comment line: flush any tolerated blank lines into the region, then record.
-			for i := 0; i < pendingBlank; i++ {
-				lines = append(lines, "")
-			}
-			pendingBlank = 0
-			text := strings.TrimPrefix(trimmed, prefix)
-			text = strings.TrimPrefix(text, " ")
-			lines = append(lines, text)
-			end = lineEnd
-			sawComment = true
-		case strings.TrimSpace(body) == "":
-			// Blank line: tolerate it only between comment lines, do not extend the span yet.
-			pendingBlank++
-		default:
-			// Non-comment content ends the leading comment run.
-			pos = len(content)
-			continue
+		if !strings.HasPrefix(trimmed, prefix) {
+			// Anything that is not a comment line -- including a truly-blank line --
+			// ends the contiguous leading comment run.
+			break
 		}
+		text := strings.TrimPrefix(trimmed, prefix)
+		text = strings.TrimPrefix(text, " ")
+		lines = append(lines, text)
+		end = lineEnd
+		sawComment = true
 		pos = lineEnd
 	}
 
@@ -336,24 +338,29 @@ func lineCommentRegion(content []byte, start int, cs model.CommentStyle) (int, i
 
 // spdxIdentifierTag extracts the SPDX id from an "SPDX-License-Identifier:" line, if
 // present. This is the universal REUSE tag and a definitive license signal.
+//
+// SAFETY (issue #30): the tag must sit at the START of a comment line (leading
+// whitespace allowed), not buried mid-prose. commentText is the leading comment with
+// per-line prefixes already stripped and lines joined by "\n", so requiring the tag to
+// begin a line means it is an actual REUSE tag rather than a sentence that merely
+// mentions the tag (e.g. a doc comment explaining the convention). Matching the tag
+// anywhere previously let such prose qualify a foreign comment as a managed header.
 func spdxIdentifierTag(commentText string) (string, bool) {
 	const tag = "spdx-license-identifier:"
-	lower := strings.ToLower(commentText)
-	idx := strings.Index(lower, tag)
-	if idx < 0 {
-		return "", false
+	for _, line := range strings.Split(commentText, "\n") {
+		trimmed := strings.TrimLeft(line, " \t")
+		if !strings.HasPrefix(strings.ToLower(trimmed), tag) {
+			continue
+		}
+		id := strings.TrimSpace(trimmed[len(tag):])
+		if id == "" {
+			// The tag is on its own line but carries no value; not a usable signal.
+			continue
+		}
+		// A multi-license expression is reported as-is; the first token is the primary id.
+		return id, true
 	}
-	rest := commentText[idx+len(tag):]
-	if nl := strings.IndexAny(rest, "\r\n"); nl >= 0 {
-		rest = rest[:nl]
-	}
-	id := strings.TrimSpace(rest)
-	if id == "" {
-		return "", false
-	}
-	// A multi-license expression is reported as-is; the first token is the primary id.
-	// (id is already non-empty here, so it always has at least one field.)
-	return id, true
+	return "", false
 }
 
 // matchStandardHeader checks the comment text against every curated SPDX
