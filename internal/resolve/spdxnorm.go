@@ -41,9 +41,12 @@ func normalizeSPDX(raw string) (string, bool) {
 	// Then try the curated alias table for the small set of non-SPDX spellings
 	// that appear ubiquitously in real-world metadata.
 	if canon, ok := spdxAliases[strings.ToLower(s)]; ok {
-		// Re-validate the canonical form against the vendored index so the alias
-		// table can never introduce an id the rest of the tool does not know.
-		if spdx.Validate(canon) {
+		// Re-validate the canonical form against the CURATED rendering set (Lookup),
+		// not merely the full index (Validate): a "resolved" alias must map to an id
+		// policy.Classify can classify, otherwise the dependency would be marked
+		// resolved yet be unclassifiable (a resolved-but-unknown contradiction). An
+		// alias whose target is valid-but-uncurated is left unresolved on purpose.
+		if _, ok := spdx.Lookup(canon); ok {
 			return canon, true
 		}
 	}
@@ -78,6 +81,20 @@ func validateSingleSPDX(s string) (string, bool) {
 // spdxAliases maps lowercased, well-known non-SPDX license spellings seen in
 // Maven POM <name> elements and npm package.json fields to their canonical SPDX
 // id. Keys are lowercased; the map is intentionally conservative.
+//
+// INVARIANTS (issue #31): every entry MUST be (1) UNAMBIGUOUS -- the spelling pins
+// an exact version/variant/clause-count, so no guessing is required -- and (2) a
+// CURATED id (one spdx.Lookup succeeds on), so a resolved alias is always
+// classifiable. Deliberately omitted because they fail (1) or (2):
+//
+//   - "bsd" / "bsd license": ambiguous clause count (2- vs 3- vs 4-clause). A bare
+//     "BSD" cannot be pinned without guessing, so it stays unresolved. Only the
+//     explicit 3-clause spellings below are kept.
+//   - "gnu lesser general public license": ambiguous version (2.1 vs 3.0) AND grant
+//     ("only" vs "or-later"). Cannot be pinned without inventing both, so unresolved.
+//   - Eclipse Public License ("EPL-2.0"/"EPL-1.0"): valid SPDX ids but outside the
+//     curated rendering set, so policy.Classify returns Unknown. Resolving them would
+//     mark a dependency resolved yet unclassifiable; they stay unresolved instead.
 var spdxAliases = map[string]string{
 	"apache 2.0":                               "Apache-2.0",
 	"apache license 2.0":                       "Apache-2.0",
@@ -86,16 +103,10 @@ var spdxAliases = map[string]string{
 	"apache-2":                                 "Apache-2.0",
 	"mit license":                              "MIT",
 	"the mit license":                          "MIT",
-	"bsd":                                      "BSD-2-Clause",
-	"bsd license":                              "BSD-2-Clause",
 	"new bsd license":                          "BSD-3-Clause",
 	"3-clause bsd license":                     "BSD-3-Clause",
 	"bsd 3-clause":                             "BSD-3-Clause",
 	"the bsd 3-clause license":                 "BSD-3-Clause",
-	"eclipse public license 2.0":               "EPL-2.0",
-	"eclipse public license - v 2.0":           "EPL-2.0",
-	"eclipse public license 1.0":               "EPL-1.0",
-	"gnu lesser general public license":        "LGPL-3.0-or-later",
 	"isc license":                              "ISC",
 	"the unlicense":                            "Unlicense",
 	"mozilla public license 2.0":               "MPL-2.0",
