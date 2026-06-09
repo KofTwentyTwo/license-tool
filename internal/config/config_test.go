@@ -169,6 +169,8 @@ holder: "Kingsrook, LLC"
 year: git
 style: reuse+notice
 manage_license_file: true
+include:
+  - "src/**"
 exclude:
   - "**/generated/**"
 policy:
@@ -188,6 +190,9 @@ file_types:
 		}
 		if fs.ManageLicenseFile == nil || !*fs.ManageLicenseFile {
 			t.Errorf("manage_license_file not decoded as true: %+v", fs.ManageLicenseFile)
+		}
+		if len(fs.Include) != 1 || fs.Include[0] != "src/**" {
+			t.Errorf("include not decoded: %+v", fs.Include)
 		}
 		if len(fs.Policy.Allow) != 2 || len(fs.FileTypes) != 1 {
 			t.Errorf("nested keys not decoded: %+v", fs)
@@ -223,7 +228,7 @@ file_types:
 func TestLoadFile(t *testing.T) {
 	t.Run("valid file seeds from defaults", func(t *testing.T) {
 		dir := t.TempDir()
-		p := filepath.Join(dir, repoConfigName)
+		p := filepath.Join(dir, RepoConfigName)
 		writeFile(t, p, `
 license: MIT
 holder: Acme
@@ -257,7 +262,7 @@ style: reuse
 
 	t.Run("invalid style errors", func(t *testing.T) {
 		dir := t.TempDir()
-		p := filepath.Join(dir, repoConfigName)
+		p := filepath.Join(dir, RepoConfigName)
 		writeFile(t, p, "style: bogus\n")
 		if _, err := LoadFile(p); err == nil {
 			t.Fatal("LoadFile with invalid style should error")
@@ -266,7 +271,7 @@ style: reuse
 
 	t.Run("explicit manage_license_file false", func(t *testing.T) {
 		dir := t.TempDir()
-		p := filepath.Join(dir, repoConfigName)
+		p := filepath.Join(dir, RepoConfigName)
 		writeFile(t, p, "manage_license_file: false\n")
 		cfg, err := LoadFile(p)
 		if err != nil {
@@ -344,7 +349,7 @@ func TestFileTypeOverrides(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			p := filepath.Join(dir, repoConfigName)
+			p := filepath.Join(dir, RepoConfigName)
 			writeFile(t, p, tt.yaml+"\n")
 			cfg, err := LoadFile(p)
 			if tt.wantErr {
@@ -454,7 +459,7 @@ year: current
 		// Repo layer overrides holder and style; inherits nothing else from user
 		// except where it stays silent (license, year here).
 		repo := t.TempDir()
-		writeFile(t, filepath.Join(repo, repoConfigName), `
+		writeFile(t, filepath.Join(repo, RepoConfigName), `
 holder: RepoHolder
 style: notice
 `)
@@ -483,7 +488,7 @@ style: notice
 		isolateXDG(t)
 		repo := t.TempDir()
 		// Discovered repo file would set MIT; explicit --config sets Apache.
-		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\n")
+		writeFile(t, filepath.Join(repo, RepoConfigName), "license: MIT\nholder: A\n")
 		explicit := filepath.Join(t.TempDir(), "custom.yaml")
 		writeFile(t, explicit, "license: Apache-2.0\nholder: B\n")
 
@@ -509,7 +514,7 @@ style: notice
 		xdg := isolateXDG(t)
 		writeFile(t, filepath.Join(xdg, "license-tool", "config.yaml"), "license: MIT\nholder: A\nexclude: [\"**/vendor/**\"]\n")
 		repo := t.TempDir()
-		writeFile(t, filepath.Join(repo, repoConfigName), "exclude: [\"**/generated/**\"]\n")
+		writeFile(t, filepath.Join(repo, RepoConfigName), "exclude: [\"**/generated/**\"]\n")
 		cfg, err := Resolve(repo, Flags{Exclude: []string{"**/*.pb.go"}}, Options{Interactive: false})
 		if err != nil {
 			t.Fatalf("Resolve error: %v", err)
@@ -522,6 +527,38 @@ style: notice
 			if !want[e] {
 				t.Errorf("unexpected exclude %q", e)
 			}
+		}
+	})
+
+	t.Run("highest non-empty include layer wins", func(t *testing.T) {
+		xdg := isolateXDG(t)
+		writeFile(t, filepath.Join(xdg, "license-tool", "config.yaml"), "license: MIT\nholder: A\ninclude: [\"global/**\"]\n")
+		repo := t.TempDir()
+		writeFile(t, filepath.Join(repo, RepoConfigName), "include: [\"repo/**\"]\n")
+
+		cfg, err := Resolve(repo, Flags{}, Options{Interactive: false})
+		if err != nil {
+			t.Fatalf("Resolve error: %v", err)
+		}
+		if len(cfg.Includes) != 1 || cfg.Includes[0] != "repo/**" {
+			t.Fatalf("includes = %v, want repo layer only", cfg.Includes)
+		}
+
+		cfg, err = Resolve(repo, Flags{Include: []string{"flags/**"}}, Options{Interactive: false})
+		if err != nil {
+			t.Fatalf("Resolve error: %v", err)
+		}
+		if len(cfg.Includes) != 1 || cfg.Includes[0] != "flags/**" {
+			t.Fatalf("includes = %v, want flags layer only", cfg.Includes)
+		}
+
+		repoWithoutInclude := t.TempDir()
+		cfg, err = Resolve(repoWithoutInclude, Flags{}, Options{Interactive: false})
+		if err != nil {
+			t.Fatalf("Resolve error: %v", err)
+		}
+		if len(cfg.Includes) != 1 || cfg.Includes[0] != "global/**" {
+			t.Fatalf("includes = %v, want user layer only", cfg.Includes)
 		}
 	})
 }
@@ -652,7 +689,7 @@ func TestResolveBadConfigSurfaces(t *testing.T) {
 	t.Run("invalid year in repo config errors", func(t *testing.T) {
 		isolateXDG(t)
 		repo := t.TempDir()
-		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\nyear: nope\n")
+		writeFile(t, filepath.Join(repo, RepoConfigName), "license: MIT\nholder: A\nyear: nope\n")
 		if _, err := Resolve(repo, Flags{}, Options{Interactive: false}); err == nil {
 			t.Fatal("invalid year in config should error")
 		}
@@ -661,7 +698,7 @@ func TestResolveBadConfigSurfaces(t *testing.T) {
 	t.Run("invalid fail_on in repo config errors", func(t *testing.T) {
 		isolateXDG(t)
 		repo := t.TempDir()
-		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\npolicy:\n  fail_on: [bogus]\n")
+		writeFile(t, filepath.Join(repo, RepoConfigName), "license: MIT\nholder: A\npolicy:\n  fail_on: [bogus]\n")
 		if _, err := Resolve(repo, Flags{}, Options{Interactive: false}); err == nil {
 			t.Fatal("invalid fail_on in config should error")
 		}
@@ -670,7 +707,7 @@ func TestResolveBadConfigSurfaces(t *testing.T) {
 	t.Run("invalid policy required expression errors with field and value", func(t *testing.T) {
 		isolateXDG(t)
 		repo := t.TempDir()
-		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\npolicy:\n  required: NOT-A-LICENSE\n")
+		writeFile(t, filepath.Join(repo, RepoConfigName), "license: MIT\nholder: A\npolicy:\n  required: NOT-A-LICENSE\n")
 		_, err := Resolve(repo, Flags{}, Options{Interactive: false})
 		if err == nil {
 			t.Fatal("invalid policy.required should error")
@@ -683,7 +720,7 @@ func TestResolveBadConfigSurfaces(t *testing.T) {
 	t.Run("policy required expression rejected because enforcement is exact id", func(t *testing.T) {
 		isolateXDG(t)
 		repo := t.TempDir()
-		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\npolicy:\n  required: MIT OR Apache-2.0\n")
+		writeFile(t, filepath.Join(repo, RepoConfigName), "license: MIT\nholder: A\npolicy:\n  required: MIT OR Apache-2.0\n")
 		_, err := Resolve(repo, Flags{}, Options{Interactive: false})
 		if err == nil {
 			t.Fatal("policy.required expression should error")
@@ -696,7 +733,7 @@ func TestResolveBadConfigSurfaces(t *testing.T) {
 	t.Run("invalid policy allow expression errors with field and value", func(t *testing.T) {
 		isolateXDG(t)
 		repo := t.TempDir()
-		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\npolicy:\n  allow: [MIT AND]\n")
+		writeFile(t, filepath.Join(repo, RepoConfigName), "license: MIT\nholder: A\npolicy:\n  allow: [MIT AND]\n")
 		_, err := Resolve(repo, Flags{}, Options{Interactive: false})
 		if err == nil {
 			t.Fatal("invalid policy.allow should error")
@@ -709,7 +746,7 @@ func TestResolveBadConfigSurfaces(t *testing.T) {
 	t.Run("policy allow expression rejected because enforcement is exact id", func(t *testing.T) {
 		isolateXDG(t)
 		repo := t.TempDir()
-		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\npolicy:\n  allow: [MIT OR Apache-2.0]\n")
+		writeFile(t, filepath.Join(repo, RepoConfigName), "license: MIT\nholder: A\npolicy:\n  allow: [MIT OR Apache-2.0]\n")
 		_, err := Resolve(repo, Flags{}, Options{Interactive: false})
 		if err == nil {
 			t.Fatal("policy.allow expression should error")
@@ -722,7 +759,7 @@ func TestResolveBadConfigSurfaces(t *testing.T) {
 	t.Run("invalid policy deny expression errors with field and value", func(t *testing.T) {
 		isolateXDG(t)
 		repo := t.TempDir()
-		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\npolicy:\n  deny: [GPL-2.0-typo]\n")
+		writeFile(t, filepath.Join(repo, RepoConfigName), "license: MIT\nholder: A\npolicy:\n  deny: [GPL-2.0-typo]\n")
 		_, err := Resolve(repo, Flags{}, Options{Interactive: false})
 		if err == nil {
 			t.Fatal("invalid policy.deny should error")
@@ -735,7 +772,7 @@ func TestResolveBadConfigSurfaces(t *testing.T) {
 	t.Run("policy deny expression rejected because enforcement is exact id", func(t *testing.T) {
 		isolateXDG(t)
 		repo := t.TempDir()
-		writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: A\npolicy:\n  deny: [GPL-2.0-only AND Apache-2.0]\n")
+		writeFile(t, filepath.Join(repo, RepoConfigName), "license: MIT\nholder: A\npolicy:\n  deny: [GPL-2.0-only AND Apache-2.0]\n")
 		_, err := Resolve(repo, Flags{}, Options{Interactive: false})
 		if err == nil {
 			t.Fatal("policy.deny expression should error")
@@ -748,7 +785,7 @@ func TestResolveBadConfigSurfaces(t *testing.T) {
 	t.Run("policy from config carried through", func(t *testing.T) {
 		isolateXDG(t)
 		repo := t.TempDir()
-		writeFile(t, filepath.Join(repo, repoConfigName), `
+		writeFile(t, filepath.Join(repo, RepoConfigName), `
 license: AGPL-3.0-or-later
 holder: Kingsrook, LLC
 policy:
@@ -775,7 +812,7 @@ policy:
 	t.Run("valid policy ids including unrenderable ids are preserved", func(t *testing.T) {
 		isolateXDG(t)
 		repo := t.TempDir()
-		writeFile(t, filepath.Join(repo, repoConfigName), `
+		writeFile(t, filepath.Join(repo, RepoConfigName), `
 license: MIT
 holder: Acme
 policy:
@@ -936,7 +973,7 @@ func TestResolveUserLayerErrors(t *testing.T) {
 func TestResolveRepoLayerLoadError(t *testing.T) {
 	isolateXDG(t)
 	repo := t.TempDir()
-	writeFile(t, filepath.Join(repo, repoConfigName), "license: [unterminated\n")
+	writeFile(t, filepath.Join(repo, RepoConfigName), "license: [unterminated\n")
 	if _, err := Resolve(repo, Flags{}, Options{Interactive: false}); err == nil {
 		t.Fatal("malformed repo config should error from Resolve")
 	}
@@ -946,7 +983,7 @@ func TestResolveRepoLayerLoadError(t *testing.T) {
 // file that reads fine but fails YAML decoding.
 func TestLoadSchemaParseError(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, repoConfigName)
+	p := filepath.Join(dir, RepoConfigName)
 	writeFile(t, p, "license: [unterminated\n")
 	_, err := loadSchema(p)
 	if err == nil {
@@ -1030,7 +1067,7 @@ func TestResolveSkipsUserLayerWithoutHome(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", "")
 	repo := t.TempDir()
-	writeFile(t, filepath.Join(repo, repoConfigName), "license: MIT\nholder: Acme\n")
+	writeFile(t, filepath.Join(repo, RepoConfigName), "license: MIT\nholder: Acme\n")
 	cfg, err := Resolve(repo, Flags{}, Options{Interactive: false})
 	if err != nil {
 		t.Fatalf("Resolve error: %v", err)
@@ -1100,6 +1137,7 @@ func TestRenderFile(t *testing.T) {
 		cfg.Year = model.YearSpec{Kind: model.YearRange, Start: 2021, End: 2026}
 		cfg.Style = model.StyleNotice
 		cfg.ManageLicenseFile = false
+		cfg.Includes = []string{"src/**"}
 		cfg.Excludes = []string{"**/generated/**"}
 		cfg.Policy = model.Policy{
 			Required: "AGPL-3.0-or-later",
@@ -1115,7 +1153,7 @@ func TestRenderFile(t *testing.T) {
 
 		// Decode the rendered bytes back via the real loader and assert the fields.
 		dir := t.TempDir()
-		p := filepath.Join(dir, repoConfigName)
+		p := filepath.Join(dir, RepoConfigName)
 		writeFile(t, p, string(data))
 		got, err := LoadFile(p)
 		if err != nil {
@@ -1132,6 +1170,9 @@ func TestRenderFile(t *testing.T) {
 		}
 		if got.ManageLicenseFile {
 			t.Errorf("manage_license_file should round-trip as false")
+		}
+		if len(got.Includes) != 1 || got.Includes[0] != "src/**" {
+			t.Errorf("includes = %v, want [src/**]", got.Includes)
 		}
 		if len(got.Excludes) != 1 || got.Excludes[0] != "**/generated/**" {
 			t.Errorf("excludes = %v, want [**/generated/**]", got.Excludes)
@@ -1184,8 +1225,8 @@ func TestWriteFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("WriteFile error: %v", err)
 		}
-		if target != filepath.Join(dir, repoConfigName) {
-			t.Errorf("target = %q, want %q", target, filepath.Join(dir, repoConfigName))
+		if target != filepath.Join(dir, RepoConfigName) {
+			t.Errorf("target = %q, want %q", target, filepath.Join(dir, RepoConfigName))
 		}
 		// The written file must load back to the same identity fields.
 		got, lerr := LoadFile(target)
@@ -1247,7 +1288,7 @@ func TestWriteFile(t *testing.T) {
 			t.Fatalf("WriteFile should surface the render error, got %v", err)
 		}
 		// A render failure must abort before any file is written.
-		if _, statErr := os.Stat(filepath.Join(dir, repoConfigName)); !os.IsNotExist(statErr) {
+		if _, statErr := os.Stat(filepath.Join(dir, RepoConfigName)); !os.IsNotExist(statErr) {
 			t.Errorf("no file should be written when render fails")
 		}
 	})

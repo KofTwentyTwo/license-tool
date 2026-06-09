@@ -76,6 +76,22 @@ func phpFileType() model.FileType {
 	}
 }
 
+// pyFileType returns a "# " line-comment Python file type. It is used to exercise the
+// issue #30 regression: a line-comment header followed by a blank line then a foreign
+// doc comment must not absorb (and therefore must not delete) that doc comment.
+func pyFileType() model.FileType {
+	return model.FileType{
+		Name:         "Python",
+		Extensions:   []string{".py"},
+		CommentStyle: model.CommentStyle{Block: false, LinePrefix: "# "},
+		PreserveFirst: []model.PreserveRule{
+			{Kind: model.PreserveBOM, Before: false},
+			{Kind: model.PreserveShebang, Before: false},
+			{Kind: model.PreserveCodingPragma, Before: false},
+		},
+	}
+}
+
 // agplConfig is the canonical apply config: AGPL, reuse+notice, an explicit year so
 // the rendered header is deterministic and independent of the wall clock.
 func agplConfig() model.Config {
@@ -328,6 +344,41 @@ func TestAtomicWriteChmodError(t *testing.T) {
 	require.ErrorIs(t, err, boom)
 }
 
+// TestAtomicWriteRefusesSymlink confirms AtomicWrite refuses to replace a target
+// that is a symlink (e.g. LICENSE -> LICENSES/MIT.txt) rather than clobbering it
+// into a regular file. The link must be left intact and its target untouched.
+func TestAtomicWriteRefusesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation is restricted on windows")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "LICENSES", "MIT.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(target, []byte("original target\n"), 0o644))
+
+	link := filepath.Join(dir, "LICENSE")
+	require.NoError(t, os.Symlink(target, link))
+
+	err := AtomicWrite(link, []byte("clobbered\n"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to write", "refusal must match the write-refusal exit-code mapping")
+	assert.ErrorIs(t, err, errSymlinkTarget)
+
+	// The symlink itself must survive as a symlink.
+	fi, lerr := os.Lstat(link)
+	require.NoError(t, lerr)
+	assert.NotZero(t, fi.Mode()&os.ModeSymlink, "LICENSE must still be a symlink")
+
+	// The link target must be unchanged (not clobbered through the link).
+	got, rerr := os.ReadFile(target)
+	require.NoError(t, rerr)
+	assert.Equal(t, "original target\n", string(got))
+
+	dest, rlerr := os.Readlink(link)
+	require.NoError(t, rlerr)
+	assert.Equal(t, target, dest, "link destination must be unchanged")
+}
+
 // --- ApplyFile ------------------------------------------------------------
 
 // agplHeaderFunc returns a HeaderRenderFunc that renders the canonical AGPL header
@@ -411,6 +462,67 @@ func TestApplyFile(t *testing.T) {
 		assert.Empty(t, diff2)
 		assert.Equal(t, once, twice)
 	})
+}
+
+// lookupLicense fetches a curated license by id or fails the test. Local to these
+// tests to avoid depending on a sibling package's test helper.
+func lookupLicense(t *testing.T, id string) model.License {
+	t.Helper()
+	lic, ok := spdx.Lookup(id)
+	require.True(t, ok, "license %q must be in the curated set", id)
+	return lic
+}
+
+// TestApplyFilePreservesDocCommentBelowBlankLine is the issue #30 end-to-end safety
+// guard. A line-comment file carrying a managed header, a blank line, then an unrelated
+// file doc comment must keep that doc comment intact across a relicense: the detected
+// span covers only the header, so the replace swaps only the header bytes.
+func TestApplyFilePreservesDocCommentBelowBlankLine(t *testing.T) {
+	ft := pyFileType()
+
+	// Step 1: insert an MIT header into a file whose body opens with a doc comment.
+	mitFunc := func(f model.FileType) (string, error) {
+		return render.Header(render.HeaderInput{
+			License:  lookupLicense(t, "MIT"),
+			Holder:   "Acme Corp",
+			Year:     "2024",
+			Style:    model.StyleReuse,
+			FileType: f,
+		})
+	}
+	body := "# This module wires the dashboard widgets together.\n" +
+		"# It is intentionally documented at the top of the file.\n" +
+		"\n" +
+		"def main():\n    pass\n"
+	withHeader, _, action, err := ApplyFile([]byte(body), ft, mitFunc)
+	require.NoError(t, err)
+	require.Equal(t, "insert", action)
+	require.Contains(t, string(withHeader), "SPDX-License-Identifier: MIT")
+	require.Contains(t, string(withHeader), "wires the dashboard widgets",
+		"the foreign doc comment must be present after insert")
+
+	// Step 2: relicense to Apache-2.0. This replaces the detected header span.
+	apacheFunc := func(f model.FileType) (string, error) {
+		return render.Header(render.HeaderInput{
+			License:  lookupLicense(t, "Apache-2.0"),
+			Holder:   "Acme Corp",
+			Year:     "2026",
+			Style:    model.StyleReuse,
+			FileType: f,
+		})
+	}
+	relicensed, _, action2, err := ApplyFile(withHeader, ft, apacheFunc)
+	require.NoError(t, err)
+	require.Equal(t, "replace", action2)
+
+	got := string(relicensed)
+	assert.Contains(t, got, "SPDX-License-Identifier: Apache-2.0", "new license written")
+	assert.NotContains(t, got, "SPDX-License-Identifier: MIT", "old license id removed")
+	// The safety-critical assertion: the foreign doc comment survives the relicense.
+	assert.Contains(t, got, "# This module wires the dashboard widgets together.",
+		"the doc comment below the blank line must survive a relicense")
+	assert.Contains(t, got, "# It is intentionally documented at the top of the file.")
+	assert.Contains(t, got, "def main():")
 }
 
 func TestApplyFileIdempotentAfterPreserveFirstConstructs(t *testing.T) {
@@ -588,7 +700,8 @@ func TestWriteManagedMkdirError(t *testing.T) {
 	// "LICENSES" exists as a FILE, so MkdirAll(LICENSES) fails for the entry write.
 	require.NoError(t, os.WriteFile(filepath.Join(root, "LICENSES"), []byte("x"), 0o644))
 
-	fr := writeManaged(root, filepath.Join("LICENSES", "AGPL-3.0-or-later.txt"), []byte("body"), Options{Write: true})
+	fr, err := writeManaged(root, filepath.Join("LICENSES", "AGPL-3.0-or-later.txt"), []byte("body"), Options{Write: true})
+	require.NoError(t, err)
 	assert.NotEmpty(t, fr.Err)
 }
 
@@ -609,8 +722,56 @@ func TestWriteManagedWriteError(t *testing.T) {
 	require.NoError(t, os.Mkdir(roDir, 0o555))
 	t.Cleanup(func() { _ = os.Chmod(roDir, 0o755) })
 
-	fr := writeManaged(roDir, "LICENSE", []byte("body"), Options{Write: true})
+	fr, err := writeManaged(roDir, "LICENSE", []byte("body"), Options{Write: true})
+	require.NoError(t, err)
 	assert.NotEmpty(t, fr.Err)
+}
+
+// TestWriteManagedRefusesSymlink confirms the managed license-file write path
+// surfaces a symlinked target as a returned refusal (so the CLI exit-code mapping
+// reports a write refusal) rather than silently clobbering the link.
+func TestWriteManagedRefusesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation is restricted on windows")
+	}
+	root := t.TempDir()
+	target := filepath.Join(root, "LICENSES", "AGPL-3.0-or-later.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(target, []byte("real license text\n"), 0o644))
+	require.NoError(t, os.Symlink(target, filepath.Join(root, "LICENSE")))
+
+	_, err := ManageLicenseFiles(root, agplConfig(), Options{Write: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to write")
+	assert.ErrorIs(t, err, errSymlinkTarget)
+
+	// The symlink and its target must be untouched.
+	fi, lerr := os.Lstat(filepath.Join(root, "LICENSE"))
+	require.NoError(t, lerr)
+	assert.NotZero(t, fi.Mode()&os.ModeSymlink)
+	got, rerr := os.ReadFile(target)
+	require.NoError(t, rerr)
+	assert.Equal(t, "real license text\n", string(got))
+}
+
+// TestLicenseRefusesSymlinkTarget confirms the refusal propagates through the
+// public License entry point, where the CLI maps it to the write-refused exit code.
+func TestLicenseRefusesSymlinkTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation is restricted on windows")
+	}
+	root := t.TempDir()
+	gitInit(t, root)
+	writeFile(t, root, "main.go", "package main\n")
+	gitAddCommit(t, root)
+	target := filepath.Join(root, "LICENSES", "AGPL-3.0-or-later.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(target, []byte("real license text\n"), 0o644))
+	require.NoError(t, os.Symlink(target, filepath.Join(root, "LICENSE")))
+
+	_, err := License(root, agplConfig(), Options{Write: true, AllowDirty: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to write")
 }
 
 // --- Apply: validation and dry-run ----------------------------------------

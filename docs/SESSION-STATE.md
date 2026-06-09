@@ -1,27 +1,32 @@
 # Session State
 
-## Current Branch
-`feature/GH-12-27-audit-fixes`
+**Last Updated:** 2026-06-09
 
-## Current Objective
-Resolve GitHub issues #6 through #27 using TDD, keep the 100% coverage gate passing, and merge the passing local feature branch back to local `develop`.
+## Current Status
+Releasing **v0.4.0**. All six feature/bugfix branches were integrated into `develop`
+(six `--no-ff` merges, conflicts resolved, combined gate green: gofmt/vet/lint, race
+tests, 100% coverage). CHANGELOG finalized as `[0.4.0] - 2026-06-09`. Promoting
+`develop` → `main` and tagging `v0.4.0` to trigger the GoReleaser `Release` workflow.
 
-## Status
-- Branch created from `develop`.
-- Audit issues filed and de-duplicated against existing open issues #6 through #11.
-- Plan and TODO created.
-- Worktrees created under `/private/tmp/license-tool-worktrees/` for write safety, CLI reporting, SPDX/policy, dependency/release/docs, and header placement slices.
-- Worker agents assigned:
-  - Write safety: #12, #13, #14, #15 on `feature/GH-12-27-write-safety`.
-  - CLI/reporting: #16, #17, #18, #25 on `feature/GH-12-27-cli-reporting`.
-  - SPDX/policy: #19, #20 on `feature/GH-12-27-spdx-policy`.
-  - Dependency/release/docs: #11, #21, #22, #23, #26 on `feature/GH-12-27-deps-release-docs`.
-  - Header placement: #6, #7, #8, #24, #27 on `feature/GH-12-27-header-placement`.
-  - File-type coverage: #9 and #10 on `feature/GH-9-10-filetype-coverage`.
-- GitHub issue comments reviewed for #6 through #27 and closed tracker #3.
-- Worker branches integrated into `feature/GH-12-27-audit-fixes`.
-- Local gates passed: `gofmt -l .`, `go vet ./...`, `golangci-lint run`, `go test ./... -race -cover`, 100% configured coverage gate, `go build ./...`, `goreleaser check`, and `gitleaks detect`.
-- `feature/GH-12-27-audit-fixes` fast-forward merged into local `develop`.
+## What shipped in v0.4.0 (issues closed)
+- #35 audit reporting overhaul (`--summary`, `--group-by`, `--sort`, `--depth`, `--only`, per-group risk + breakdowns, attributable violations, findings parity) + self-config exclusion + policy-aware group risk.
+- #29 init full TUI wizard + live previews + persisted `include`.
+- #31 resolve: stop guessing SPDX ids for ambiguous aliases.
+- #34 remove no-op `--quiet`/`--verbose` flags.
+- #33 refuse to clobber a symlinked LICENSE.
+- #30 confine header detection to contiguous comment lines.
 
-## Next Step
-Manual review and testing before any push to GitHub, promotion to `main`, tag, or release.
+## Release process
+Documented end-to-end in `RELEASES.md` (full runbook) and `RELEASING.md` (short ref).
+Tag `vX.Y.Z` on `main` triggers `goreleaser release --clean`: GitHub Release + Homebrew
+cask (`KofTwentyTwo/homebrew-tap`). Verify with `gh release view` and
+`brew install --cask KofTwentyTwo/tap/license-tool && license-tool version`.
+
+## Open Threads / follow-ups
+- [ ] Deferred LOW items: #41/#30 block-comment de-stacking; #39/#34 `isWriteRefusal` typed-sentinel refactor and the still-dead `model.ResolveOptions.Verbose` field.
+- [ ] #32 (include `**`) was fixed on GH-29.
+
+## Key Reference
+- Default branch `develop`; production `main`; tags `vX.Y.Z` on `main` publish via GoReleaser.
+- Gate: `gofmt -l .`; `go vet ./...`; `golangci-lint run`; `go test ./... -race -coverpkg=./internal/...,./cmd/... -covermode=atomic -coverprofile=cover.out`; `go run github.com/vladopajic/go-test-coverage/v2@v2.18.8 --config=.testcoverage.yml`. (Do not pipe `go build`/`go test` to `tail` — it masks the exit code.)
+- Repo: GitHub `KofTwentyTwo/license-tool`; commits reference issues, no AI attribution.

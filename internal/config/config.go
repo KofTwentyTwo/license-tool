@@ -23,9 +23,11 @@ import (
 	"github.com/KofTwentyTwo/license-tool/internal/spdx"
 )
 
-// repoConfigName is the committed, per-repo config file discovered at the scan
-// root. It doubles as the apply input and the check expectation for a repo.
-const repoConfigName = ".license-tool.yaml"
+// RepoConfigName is the committed, per-repo config file discovered at the scan
+// root. It doubles as the apply input and the check expectation for a repo, and is
+// the basename the audit excludes from source/header coverage (tool metadata, not
+// coverable source).
+const RepoConfigName = ".license-tool.yaml"
 
 // userConfigRel is the user/global config path relative to $XDG_CONFIG_HOME.
 const userConfigRel = "license-tool/config.yaml"
@@ -93,6 +95,7 @@ func Defaults() model.Config {
 		Year:              model.YearSpec{Kind: model.YearGit},
 		Style:             model.StyleReusePlusNotice,
 		ManageLicenseFile: true,
+		Includes:          nil,
 		Excludes:          nil,
 		Policy: model.Policy{
 			FailOn: []model.FailCondition{
@@ -211,6 +214,7 @@ func RenderFile(cfg model.Config) ([]byte, error) {
 		Year:              yearSpecRaw(cfg.Year),
 		Style:             cfg.Style.String(),
 		ManageLicenseFile: &cfg.ManageLicenseFile,
+		Include:           cfg.Includes,
 		Exclude:           cfg.Excludes,
 	}
 	// Only emit a policy block when the config actually carries policy intent, so a
@@ -238,7 +242,7 @@ var renderFile = RenderFile
 // committed config, so an existing target is a hard error unless the caller opted in
 // with force (the --force flag). The 0o644 mode matches a normal committed text file.
 func WriteFile(path string, cfg model.Config, force bool) (string, error) {
-	target := filepath.Join(path, repoConfigName)
+	target := filepath.Join(path, RepoConfigName)
 	if !force && fileExists(target) {
 		return "", fmt.Errorf("config: %s already exists (use --force)", target)
 	}
@@ -301,6 +305,7 @@ type fileSchema struct {
 	Year              string                          `yaml:"year"`
 	Style             string                          `yaml:"style"`
 	ManageLicenseFile *bool                           `yaml:"manage_license_file"`
+	Include           []string                        `yaml:"include"`
 	Exclude           []string                        `yaml:"exclude"`
 	Policy            policySchema                    `yaml:"policy"`
 	FileTypes         map[string]fileTypeOverrideYAML `yaml:"file_types"`
@@ -366,6 +371,9 @@ func mergeSchema(cfg *model.Config, fs fileSchema) error {
 	}
 	if fs.ManageLicenseFile != nil {
 		cfg.ManageLicenseFile = *fs.ManageLicenseFile
+	}
+	if len(fs.Include) > 0 {
+		cfg.Includes = append([]string(nil), fs.Include...)
 	}
 	if len(fs.Exclude) > 0 {
 		// Excludes accumulate: a layer's excludes add to, rather than replace, the
@@ -449,6 +457,9 @@ func mergeFlags(cfg *model.Config, flags Flags) error {
 	}
 	if len(flags.Exclude) > 0 {
 		cfg.Excludes = append(cfg.Excludes, flags.Exclude...)
+	}
+	if len(flags.Include) > 0 {
+		cfg.Includes = append([]string(nil), flags.Include...)
 	}
 	return nil
 }
@@ -674,7 +685,7 @@ func repoConfigPath(scanPath, configFlag string) (path string, explicit bool) {
 	if configFlag != "" {
 		return configFlag, true
 	}
-	return filepath.Join(scanPath, repoConfigName), false
+	return filepath.Join(scanPath, RepoConfigName), false
 }
 
 // fileExists reports whether path names an existing regular-readable file.

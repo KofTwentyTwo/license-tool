@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/KofTwentyTwo/license-tool/internal/config"
 	"github.com/KofTwentyTwo/license-tool/internal/detect"
 	"github.com/KofTwentyTwo/license-tool/internal/enumerate"
+	"github.com/KofTwentyTwo/license-tool/internal/initwizard"
 	"github.com/KofTwentyTwo/license-tool/internal/model"
 	"github.com/KofTwentyTwo/license-tool/internal/report"
 	"github.com/KofTwentyTwo/license-tool/internal/resolve"
@@ -30,8 +32,6 @@ type sharedFlags struct {
 	include     []string
 	exclude     []string
 	noGitignore bool
-	quiet       bool
-	verbose     bool
 }
 
 // newRootCmd assembles the full command tree. WHY a constructor that takes
@@ -53,8 +53,6 @@ func newRootCmd(info buildInfo) *cobra.Command {
 	pf.StringArrayVar(&shared.include, "include", nil, "glob of files to include (repeatable)")
 	pf.StringArrayVar(&shared.exclude, "exclude", nil, "glob of files to exclude (repeatable)")
 	pf.BoolVar(&shared.noGitignore, "no-gitignore", false, "do not inherit .gitignore on the non-git walk")
-	pf.BoolVarP(&shared.quiet, "quiet", "q", false, "suppress non-essential output")
-	pf.BoolVarP(&shared.verbose, "verbose", "v", false, "verbose diagnostic output")
 
 	root.AddCommand(
 		newAuditCmd(shared),
@@ -83,6 +81,42 @@ type auditFlags struct {
 	noDeps      bool
 	resolveDeps string
 	failOn      []string
+	summary     bool
+	groupBy     string
+	sort        string
+	depth       int
+	only        string
+}
+
+// renderOptions parses the summary/group-by/sort flags into report.RenderOptions,
+// surfacing an unknown --group-by or --sort value as a usage error.
+func (f auditFlags) renderOptions() (report.RenderOptions, error) {
+	dim, err := report.ParseGroupBy(f.groupBy)
+	if err != nil {
+		return report.RenderOptions{}, err
+	}
+	byCount, err := parseSort(f.sort)
+	if err != nil {
+		return report.RenderOptions{}, err
+	}
+	only, err := report.ParseOnly(f.only)
+	if err != nil {
+		return report.RenderOptions{}, err
+	}
+	return report.RenderOptions{Summary: f.summary, GroupBy: dim, SortByCount: byCount, DirectoryDepth: f.depth, Only: only}, nil
+}
+
+// parseSort maps the --sort token to the by-count flag. "" and "key" sort
+// alphabetically; "count" sorts by descending frequency.
+func parseSort(raw string) (bool, error) {
+	switch raw {
+	case "", "key":
+		return false, nil
+	case "count":
+		return true, nil
+	default:
+		return false, fmt.Errorf("audit: unknown sort %q (expected key|count)", raw)
+	}
 }
 
 func (f auditFlags) includeDeps() bool {
@@ -108,6 +142,10 @@ func newAuditCmd(shared *sharedFlags) *cobra.Command {
 			if validateErr := validateResolveDeps(f.resolveDeps); validateErr != nil {
 				return usageError(validateErr)
 			}
+			renderOpts, err := f.renderOptions()
+			if err != nil {
+				return usageError(err)
+			}
 			r, err := report.Audit(path, cfg, report.Options{
 				Format:            format,
 				IncludeDeps:       f.includeDeps(),
@@ -117,7 +155,7 @@ func newAuditCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return internalError(err)
 			}
-			if err := renderCommandReport(cmd, f.output, r, format); err != nil {
+			if err := renderCommandReport(cmd, f.output, r, format, renderOpts); err != nil {
 				return err
 			}
 			return nil
@@ -153,6 +191,10 @@ func newCheckCmd(shared *sharedFlags) *cobra.Command {
 			if validateErr := validateResolveDeps(f.resolveDeps); validateErr != nil {
 				return usageError(validateErr)
 			}
+			renderOpts, err := f.renderOptions()
+			if err != nil {
+				return usageError(err)
+			}
 			r, err := report.Audit(path, cfg, report.Options{
 				Format:            format,
 				IncludeDeps:       f.includeDeps(),
@@ -162,7 +204,7 @@ func newCheckCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return internalError(err)
 			}
-			if err := renderCommandReport(cmd, f.output, r, format); err != nil {
+			if err := renderCommandReport(cmd, f.output, r, format, renderOpts); err != nil {
 				return err
 			}
 			if !r.Passed {
@@ -184,6 +226,11 @@ func bindAuditFlags(cmd *cobra.Command, f *auditFlags, isCheck bool) {
 	cmd.Flags().BoolVar(&f.deps, "deps", true, "resolve dependency licenses")
 	cmd.Flags().BoolVar(&f.noDeps, "no-deps", false, "skip dependency license resolution")
 	cmd.Flags().StringVar(&f.resolveDeps, "resolve-deps", "ondisk", "dependency resolution tier: ondisk|tool|off")
+	cmd.Flags().BoolVar(&f.summary, "summary", false, "counts only: omit the per-file and per-dependency lists")
+	cmd.Flags().StringVar(&f.groupBy, "group-by", "", "group source files by: license|category|type|directory")
+	cmd.Flags().StringVar(&f.sort, "sort", "key", "rollup/group order: key|count")
+	cmd.Flags().IntVar(&f.depth, "depth", 1, "directory grouping depth (with --group-by directory)")
+	cmd.Flags().StringVar(&f.only, "only", "", "list only problem files: missing|unknown|copyleft|violations (comma-separated)")
 	if isCheck {
 		cmd.Flags().StringArrayVar(&f.failOn, "fail-on", []string{"missing-header", "unknown-license", "policy-violation"}, "conditions that cause a non-zero exit")
 	}
@@ -223,7 +270,7 @@ func newApplyCmd(shared *sharedFlags) *cobra.Command {
 			// for write operations, so no second check is needed here.
 			r, err := applier.Apply(path, cfg, applier.Options{
 				Write:             f.write,
-				Includes:          shared.include,
+				Includes:          cfg.Includes,
 				AllowDirty:        f.allowDirty,
 				Force:             f.force,
 				NoGitignore:       shared.noGitignore,
@@ -261,7 +308,7 @@ func newLicenseCmd(shared *sharedFlags) *cobra.Command {
 			// for write operations, so no second check is needed here.
 			results, err := applier.License(path, cfg, applier.Options{
 				Write:             f.write,
-				Includes:          shared.include,
+				Includes:          cfg.Includes,
 				AllowDirty:        f.allowDirty,
 				Force:             f.force,
 				NoGitignore:       shared.noGitignore,
@@ -310,9 +357,9 @@ var createReportFile = func(name string) (io.WriteCloser, error) {
 	return os.Create(name)
 }
 
-func renderCommandReport(cmd *cobra.Command, output string, r model.Report, format report.Format) error {
+func renderCommandReport(cmd *cobra.Command, output string, r model.Report, format report.Format, opts report.RenderOptions) error {
 	if output == "" {
-		if err := report.Render(cmd.OutOrStdout(), r, format); err != nil {
+		if err := report.RenderWithOptions(cmd.OutOrStdout(), r, format, opts); err != nil {
 			return internalError(err)
 		}
 		return nil
@@ -322,7 +369,7 @@ func renderCommandReport(cmd *cobra.Command, output string, r model.Report, form
 	if err != nil {
 		return internalError(fmt.Errorf("report: create output %s: %w", output, err))
 	}
-	renderErr := report.Render(f, r, format)
+	renderErr := report.RenderWithOptions(f, r, format, opts)
 	closeErr := f.Close()
 	if renderErr != nil {
 		return internalError(renderErr)
@@ -389,48 +436,9 @@ func bindApplyFlags(cmd *cobra.Command, f *applyFlags) {
 }
 
 // interactiveCollect is a package-level seam over collectInteractive so tests can
-// drive the init command's non-interactive flow (and inject answers) without a real
-// terminal. Production always points at the huh-backed collectInteractive.
+// inject richer wizard answers without a real terminal. Production points at the
+// Bubble Tea collector, which no-ops when interactive is false.
 var interactiveCollect = collectInteractive
-
-// answersToConfig validates and converts collected init answers into a model.Config,
-// starting from the built-in Defaults so unset answers carry the documented default
-// behavior. WHY validation lives here, not in the wizard: the wizard is the
-// interactive shell (excluded from coverage); answersToConfig is the single tested
-// gate that both the TTY and flag-only paths funnel through, so an invalid or
-// unrenderable license and an empty holder are rejected identically regardless of
-// how the answers arrived.
-func answersToConfig(a initAnswers) (model.Config, error) {
-	if !spdx.Validate(a.License) {
-		return model.Config{}, fmt.Errorf("init: %q is not a recognized SPDX license identifier", a.License)
-	}
-	if _, ok := spdx.Lookup(a.License); !ok {
-		return model.Config{}, fmt.Errorf("init: %q is a recognized SPDX license identifier, but license-tool cannot render it", a.License)
-	}
-	if a.Holder == "" {
-		return model.Config{}, fmt.Errorf("init: copyright holder is required")
-	}
-	cfg := config.Defaults()
-	cfg.License = a.License
-	cfg.Holder = a.Holder
-	if a.Year != "" {
-		ys, err := config.ParseYearSpec(a.Year)
-		if err != nil {
-			return model.Config{}, err
-		}
-		cfg.Year = ys
-	}
-	if a.Style != "" {
-		st, err := config.ParseStyle(a.Style)
-		if err != nil {
-			return model.Config{}, err
-		}
-		cfg.Style = st
-	}
-	cfg.ManageLicenseFile = a.ManageLicenseFile
-	cfg.Excludes = a.Excludes
-	return cfg, nil
-}
 
 func newInitCmd(shared *sharedFlags) *cobra.Command {
 	f := &applyFlags{}
@@ -441,18 +449,21 @@ func newInitCmd(shared *sharedFlags) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := argPath(args)
 			out := cmd.OutOrStdout()
-			a := initAnswers{
-				License:           f.license,
-				Holder:            f.holder,
-				Year:              f.year,
-				Style:             f.style,
-				ManageLicenseFile: true,
-				Excludes:          shared.exclude,
+			a := initwizard.Answers{
+				License:      initwizard.LicenseAnswer{SPDXID: f.license},
+				Identity:     initwizard.IdentityAnswer{Holder: f.holder, Year: f.year},
+				HeaderStyle:  initwizard.HeaderStyleAnswer{Style: f.style},
+				LicenseFiles: initwizard.LicenseFilesAnswer{Manage: true},
+				Coverage: initwizard.CoverageAnswer{
+					Include: shared.include,
+					Exclude: shared.exclude,
+				},
 			}
-			if err := interactiveCollect(&a, isTTY()); err != nil {
+			a, err := interactiveCollect(path, a, isTTY())
+			if err != nil {
 				return usageError(err)
 			}
-			cfg, err := answersToConfig(a)
+			cfg, err := initwizard.Translate(a, initwizard.TranslateOptions{})
 			if err != nil {
 				return usageError(err)
 			}
@@ -490,12 +501,16 @@ func newVersionCmd(info buildInfo) *cobra.Command {
 // content (the report layer needs the bytes for detection); Detect is the detector
 // directly; ResolveDeps iterates the ecosystem resolvers detected at the root and
 // concatenates their findings (unresolved entries included, never guessed).
+// reasonToolConfig is the skip reason recorded for the tool's own config file, so it
+// is shown in the file listing but excluded from source/header coverage tallies.
+const reasonToolConfig = "tool config"
+
 func buildAuditPipeline(cfg model.Config, shared *sharedFlags) report.Pipeline {
 	classify := config.ContentLookupFunc(cfg)
 	return report.Pipeline{
 		Enumerate: func(root string, excludes []string) ([]report.SourceFile, error) {
 			entries, err := enumerate.WithContent(root, enumerate.Options{
-				Includes:    shared.include,
+				Includes:    cfg.Includes,
 				Excludes:    excludes,
 				NoGitignore: shared.noGitignore,
 			}, classify)
@@ -510,7 +525,15 @@ func buildAuditPipeline(cfg model.Config, shared *sharedFlags) report.Pipeline {
 					Skip:       e.Skip,
 					SkipReason: e.SkipReason,
 				}
-				if !e.Skip {
+				// The tool's own .license-tool.yaml is metadata, not coverable source: it
+				// never carries a managed header, so counting it would inflate
+				// sourceTotal/sourceMissing. Mark it skipped (still listed, with a reason)
+				// rather than counting it as a headerless source file.
+				if !sf.Skip && path.Base(e.Path) == config.RepoConfigName {
+					sf.Skip = true
+					sf.SkipReason = reasonToolConfig
+				}
+				if !sf.Skip {
 					content, rerr := os.ReadFile(e.AbsPath)
 					if rerr != nil {
 						sf.Skip = true

@@ -109,24 +109,22 @@ func enumerate(root string, opts Options, classify ContentClassifier, contentAwa
 		return nil, err
 	}
 
-	// Config/flag excludes apply uniformly on both paths. On the git path they layer
-	// on top of git's own .gitignore handling; on the walk path they layer on top of
-	// the .gitignore matcher already applied during the walk.
-	var excluder *ignore.GitIgnore
-	if len(opts.Excludes) > 0 {
-		excluder = ignore.CompileIgnoreLines(opts.Excludes...)
-	}
+	// Includes and excludes share one gitignore-style matcher so their glob semantics
+	// (** and slash-less "any depth") cannot diverge. Excludes apply uniformly on both
+	// discovery paths, layering on top of git's / the walk's own .gitignore handling.
+	includer := CompileMatcher(opts.Includes)
+	excluder := CompileMatcher(opts.Excludes)
 
 	entries := make([]Entry, 0, len(relPaths))
 	for _, rel := range relPaths {
-		// Normalize to forward slashes so glob/gitignore matching is OS-independent;
-		// MatchesPath itself also normalizes, but Includes use filepath.Match.
+		// Normalize to forward slashes so matching is OS-independent.
 		rel = filepath.ToSlash(rel)
 
-		if !matchesIncludes(rel, opts.Includes) {
+		// An empty include set matches everything (the common case).
+		if !includer.Empty() && !includer.Match(rel) {
 			continue
 		}
-		if excluder != nil && excluder.MatchesPath(rel) {
+		if excluder.Match(rel) {
 			continue
 		}
 
@@ -259,26 +257,6 @@ func readHead(abs string) ([]byte, error) {
 		return nil, err
 	}
 	return buf[:n], nil
-}
-
-// matchesIncludes reports whether rel satisfies the include globs. An empty include
-// set matches everything (the common case); otherwise a path must match at least one
-// glob, tested against both the full relative path and its base name so a bare
-// "*.go" works regardless of directory depth.
-func matchesIncludes(rel string, includes []string) bool {
-	if len(includes) == 0 {
-		return true
-	}
-	base := filepath.Base(rel)
-	for _, pat := range includes {
-		if ok, _ := filepath.Match(pat, rel); ok {
-			return true
-		}
-		if ok, _ := filepath.Match(pat, base); ok {
-			return true
-		}
-	}
-	return false
 }
 
 // isGitRepo reports whether path is inside a git working tree. WHY shell out rather

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/KofTwentyTwo/license-tool/internal/config"
 	"github.com/KofTwentyTwo/license-tool/internal/enumerate"
+	"github.com/KofTwentyTwo/license-tool/internal/initwizard"
 	"github.com/KofTwentyTwo/license-tool/internal/model"
 	"github.com/KofTwentyTwo/license-tool/internal/report"
 	"github.com/KofTwentyTwo/license-tool/internal/spdx"
@@ -159,8 +161,27 @@ func TestNewRootCmd(t *testing.T) {
 	}
 
 	// Persistent flags are bound on the root.
-	for _, f := range []string{"config", "include", "exclude", "no-gitignore", "quiet", "verbose"} {
+	for _, f := range []string{"config", "include", "exclude", "no-gitignore"} {
 		assert.NotNil(t, root.PersistentFlags().Lookup(f), "persistent flag %q", f)
+	}
+
+	// The no-op --quiet/--verbose flags (and their -q/-v shorthands) were removed
+	// in #34: the CLI had no non-essential output to gate and no diagnostic stream
+	// to emit, so the flags advertised behavior they never delivered.
+	for _, f := range []string{"quiet", "verbose"} {
+		assert.Nil(t, root.PersistentFlags().Lookup(f), "removed persistent flag %q must not be registered", f)
+	}
+}
+
+func TestQuietVerboseFlagsRemoved(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t)
+	for _, arg := range []string{"--quiet", "-q", "--verbose", "-v"} {
+		t.Run(arg, func(t *testing.T) {
+			_, stderr, code := executeRoot(t, "audit", arg, dir)
+			assert.Equal(t, exitUsage, code, "removed flag %q should yield a usage error", arg)
+			assert.Contains(t, stderr, "unknown")
+		})
 	}
 }
 
@@ -267,6 +288,64 @@ func TestAuditCommand(t *testing.T) {
 		assert.Contains(t, out, `"schema": "license-tool/report/v1"`)
 	})
 
+	t.Run("tool config file is excluded from source coverage", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML)
+		writeFile(t, dir, "main.go", "package main\n\nfunc main() {}\n")
+
+		out, err := runRoot(t, "audit", dir, "--format", "json", "--deps=false")
+		require.NoError(t, err)
+
+		var got struct {
+			Findings struct {
+				SourceTotal   int `json:"sourceTotal"`
+				SourceMissing int `json:"sourceMissing"`
+			} `json:"findings"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(out), &got))
+		assert.Equal(t, 1, got.Findings.SourceTotal, "only main.go is coverable source; the tool's own config is not")
+		assert.Equal(t, 1, got.Findings.SourceMissing, "the headerless config file must not inflate sourceMissing")
+
+		entry := jsonFileEntry(t, out, ".license-tool.yaml")
+		assert.Equal(t, true, entry["skipped"], ".license-tool.yaml should be skipped, not counted as source")
+		assert.Equal(t, "tool config", entry["skipReason"])
+		// Detection and policy never run on the skipped config, so its declared license
+		// does not leak into the report as a detected header or a violation.
+		assert.Equal(t, false, entry["hasHeader"], "no header is detected on the skipped config")
+		assert.NotContains(t, entry, "spdxId", "the config's declared license must not surface as a detected id")
+		assert.NotContains(t, entry, "violations", "the skipped config carries no policy violations")
+	})
+
+	t.Run("tool config is excluded when nested and under --only", func(t *testing.T) {
+		// Basename match excludes the config at any depth, and a headerless config must
+		// never leak into the --only=missing problem list.
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML)
+		writeFile(t, dir, filepath.Join("sub", ".license-tool.yaml"), configYAML)
+		writeFile(t, dir, "main.go", "package main\n\nfunc main() {}\n")
+
+		out, err := runRoot(t, "audit", dir, "--format", "json", "--deps=false", "--only", "missing")
+		require.NoError(t, err)
+
+		var got struct {
+			Findings struct {
+				SourceTotal int `json:"sourceTotal"`
+			} `json:"findings"`
+			Files []map[string]any `json:"files"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(out), &got))
+		assert.Equal(t, 1, got.Findings.SourceTotal, "both root and nested config are excluded; only main.go counts")
+
+		// The --only=missing listing lists the headerless main.go but neither config.
+		listed := map[string]bool{}
+		for _, f := range got.Files {
+			listed[f["path"].(string)] = true
+		}
+		assert.True(t, listed["main.go"], "the headerless main.go is a missing-header problem file")
+		assert.False(t, listed[".license-tool.yaml"], "the root config must not appear in --only=missing")
+		assert.False(t, listed[filepath.ToSlash(filepath.Join("sub", ".license-tool.yaml"))], "the nested config must not appear in --only=missing")
+	})
+
 	t.Run("output file", func(t *testing.T) {
 		dir := fixtureDir(t)
 		outPath := filepath.Join(dir, "audit.json")
@@ -293,6 +372,30 @@ func TestAuditCommand(t *testing.T) {
 		out, err := runRoot(t, "audit", dir, "--format", "markdown", "--deps=false")
 		require.NoError(t, err)
 		assert.Contains(t, out, "# license-tool audit report")
+	})
+
+	t.Run("config include scopes source enumeration", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML+"include: [\"included.go\"]\n")
+		writeFile(t, dir, "included.go", "package included\n")
+		writeFile(t, dir, "excluded.go", "package excluded\n")
+
+		out, err := runRoot(t, "audit", dir, "--deps=false")
+		require.NoError(t, err)
+		assert.Contains(t, out, "included.go")
+		assert.NotContains(t, out, "excluded.go")
+	})
+
+	t.Run("flag include overrides config include", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML+"include: [\"repo.go\"]\n")
+		writeFile(t, dir, "repo.go", "package repo\n")
+		writeFile(t, dir, "flag.go", "package flag\n")
+
+		out, err := runRoot(t, "audit", dir, "--include", "flag.go", "--deps=false")
+		require.NoError(t, err)
+		assert.Contains(t, out, "flag.go")
+		assert.NotContains(t, out, "repo.go")
 	})
 
 	t.Run("default path resolves to dot", func(t *testing.T) {
@@ -452,6 +555,18 @@ func TestCheckCommand(t *testing.T) {
 		writeFile(t, dir, "main.go", "package main\n")
 		_, err := runRoot(t, "check", dir, "--deps=false")
 		require.NoError(t, err)
+	})
+
+	t.Run("tool config does not trigger a missing-header check failure", func(t *testing.T) {
+		// The config is headerless YAML; under the default fail_on (which includes
+		// missing-header) it would fail check if counted as source. Excluding it lets a
+		// repo whose only other file is properly headered pass. This guards the audit
+		// pipeline's config exclusion against regression on the check exit code.
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML)
+		writeFile(t, dir, "main.go", "/* SPDX-License-Identifier: AGPL-3.0-or-later */\n\npackage main\n")
+		_, err := runRoot(t, "check", dir, "--deps=false")
+		require.NoError(t, err, "the tool's own config must not cause a missing-header check failure")
 	})
 
 	t.Run("fail-on flag overrides check policy", func(t *testing.T) {
@@ -734,6 +849,25 @@ func TestApplyCommand(t *testing.T) {
 		assert.NotContains(t, string(ignored), "SPDX-License-Identifier")
 	})
 
+	t.Run("write honors config include scope", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configNoManagedYAML+"include: [\"included.go\"]\n")
+		writeFile(t, dir, "included.go", "package included\n")
+		writeFile(t, dir, "ignored.go", "package ignored\n")
+		initGitRepo(t, dir)
+
+		_, err := runRoot(t, "apply", dir, "--write")
+		require.NoError(t, err)
+
+		included, rerr := os.ReadFile(filepath.Join(dir, "included.go"))
+		require.NoError(t, rerr)
+		assert.Contains(t, string(included), "SPDX-License-Identifier: AGPL-3.0-or-later")
+
+		ignored, rerr := os.ReadFile(filepath.Join(dir, "ignored.go"))
+		require.NoError(t, rerr)
+		assert.NotContains(t, string(ignored), "SPDX-License-Identifier")
+	})
+
 	t.Run("allow-dirty commit leaves unrelated changes uncommitted", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, ".license-tool.yaml", configNoManagedYAML)
@@ -828,6 +962,31 @@ func TestLicenseCommand(t *testing.T) {
 		assert.True(t, os.IsNotExist(statErr))
 	})
 
+	t.Run("symlinked LICENSE is refused with the write-refused exit code", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation is restricted on windows")
+		}
+		dir := fixtureDir(t)
+		initGitRepo(t, dir)
+		target := filepath.Join(dir, "LICENSES", "AGPL-3.0-or-later.txt")
+		require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+		require.NoError(t, os.WriteFile(target, []byte("real license text\n"), 0o644))
+		require.NoError(t, os.Symlink(target, filepath.Join(dir, "LICENSE")))
+
+		_, err := runRoot(t, "license", dir, "--write", "--allow-dirty")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "refusing to write")
+		assert.Equal(t, exitWriteRefused, exitCode(err), "symlink refusal must map to the write-refused exit code")
+
+		// The link survives as a link and its target is untouched.
+		fi, lerr := os.Lstat(filepath.Join(dir, "LICENSE"))
+		require.NoError(t, lerr)
+		assert.NotZero(t, fi.Mode()&os.ModeSymlink)
+		got, rerr := os.ReadFile(target)
+		require.NoError(t, rerr)
+		assert.Equal(t, "real license text\n", string(got))
+	})
+
 	t.Run("commit flags create scoped license-file commit", func(t *testing.T) {
 		dir := fixtureDir(t)
 		initGitRepo(t, dir)
@@ -876,9 +1035,9 @@ func TestInitCommand(t *testing.T) {
 
 	t.Run("flags scaffold config file", func(t *testing.T) {
 		// Non-TTY stdin (forced by isolateEnv) skips the wizard, so init scaffolds a
-		// .license-tool.yaml purely from the --license/--holder flags.
+		// .license-tool.yaml purely from flags.
 		dir := t.TempDir()
-		out, err := runRoot(t, "init", dir, "--license", "MIT", "--holder", "Acme")
+		out, err := runRoot(t, "init", dir, "--license", "MIT", "--holder", "Acme", "--include", "src/**", "--exclude", "vendor/**")
 		require.NoError(t, err)
 		target := filepath.Join(dir, ".license-tool.yaml")
 		assert.Contains(t, out, "wrote "+target)
@@ -887,6 +1046,8 @@ func TestInitCommand(t *testing.T) {
 		require.NoError(t, lerr)
 		assert.Equal(t, "MIT", cfg.License)
 		assert.Equal(t, "Acme", cfg.Holder)
+		assert.Equal(t, []string{"src/**"}, cfg.Includes)
+		assert.Equal(t, []string{"vendor/**"}, cfg.Excludes)
 	})
 
 	t.Run("missing license errors", func(t *testing.T) {
@@ -925,66 +1086,6 @@ func TestInitCommand(t *testing.T) {
 	})
 }
 
-// TestAnswersToConfig drives the single tested gate that both the TTY wizard and
-// the flag-only path funnel through: the valid case plus each rejection (unknown
-// license, empty holder, bad year, bad style). WHY exhaustive here: the wizard shell
-// is excluded from coverage, so this is the only place the validation/parse arms are
-// exercised, and they must reject identically regardless of how answers arrived.
-func TestAnswersToConfig(t *testing.T) {
-	t.Run("valid answers build a config from defaults", func(t *testing.T) {
-		cfg, err := answersToConfig(initAnswers{
-			License:           "MIT",
-			Holder:            "Acme, LLC",
-			Year:              "2021-2026",
-			Style:             "reuse",
-			ManageLicenseFile: false,
-			Excludes:          []string{"**/vendor/**"},
-		})
-		require.NoError(t, err)
-		assert.Equal(t, "MIT", cfg.License)
-		assert.Equal(t, "Acme, LLC", cfg.Holder)
-		assert.Equal(t, model.YearRange, cfg.Year.Kind)
-		assert.Equal(t, 2021, cfg.Year.Start)
-		assert.Equal(t, 2026, cfg.Year.End)
-		assert.Equal(t, model.StyleReuse, cfg.Style)
-		assert.False(t, cfg.ManageLicenseFile)
-		assert.Equal(t, []string{"**/vendor/**"}, cfg.Excludes)
-	})
-
-	t.Run("empty year and style keep the built-in defaults", func(t *testing.T) {
-		// Unset year/style answers must leave the Defaults() values untouched, so the
-		// year/style parse branches are skipped (not defaulted to a parse of "").
-		cfg, err := answersToConfig(initAnswers{License: "MIT", Holder: "Acme"})
-		require.NoError(t, err)
-		assert.Equal(t, model.YearGit, cfg.Year.Kind)
-		assert.Equal(t, model.StyleReusePlusNotice, cfg.Style)
-	})
-
-	t.Run("unknown license rejected", func(t *testing.T) {
-		_, err := answersToConfig(initAnswers{License: "NOT-A-LICENSE", Holder: "Acme"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not a recognized SPDX license identifier")
-	})
-
-	t.Run("empty holder rejected", func(t *testing.T) {
-		_, err := answersToConfig(initAnswers{License: "MIT", Holder: ""})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "copyright holder is required")
-	})
-
-	t.Run("bad year rejected", func(t *testing.T) {
-		_, err := answersToConfig(initAnswers{License: "MIT", Holder: "Acme", Year: "not-a-year"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "year")
-	})
-
-	t.Run("bad style rejected", func(t *testing.T) {
-		_, err := answersToConfig(initAnswers{License: "MIT", Holder: "Acme", Style: "fancy"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unknown style")
-	})
-}
-
 func TestParseFailOnFlags(t *testing.T) {
 	got, err := parseFailOnFlags([]string{"missing-header, unknown-license", "policy-violation", "unresolved-dependency"})
 	require.NoError(t, err)
@@ -1005,12 +1106,12 @@ func TestRenderCommandReportErrors(t *testing.T) {
 	var out bytes.Buffer
 	root.SetOut(&out)
 
-	err := renderCommandReport(root, "", model.Report{}, report.Format(99))
+	err := renderCommandReport(root, "", model.Report{}, report.Format(99), report.RenderOptions{})
 	require.Error(t, err)
 	assert.Equal(t, exitInternal, exitCode(err))
 	assert.Empty(t, out.String())
 
-	err = renderCommandReport(root, filepath.Join(t.TempDir(), "report.txt"), model.Report{}, report.Format(99))
+	err = renderCommandReport(root, filepath.Join(t.TempDir(), "report.txt"), model.Report{}, report.Format(99), report.RenderOptions{})
 	require.Error(t, err)
 	assert.Equal(t, exitInternal, exitCode(err))
 
@@ -1020,7 +1121,7 @@ func TestRenderCommandReportErrors(t *testing.T) {
 	}
 	t.Cleanup(func() { createReportFile = orig })
 
-	err = renderCommandReport(root, filepath.Join(t.TempDir(), "report.txt"), model.Report{}, report.FormatText)
+	err = renderCommandReport(root, filepath.Join(t.TempDir(), "report.txt"), model.Report{}, report.FormatText, report.RenderOptions{})
 	require.Error(t, err)
 	assert.Equal(t, exitInternal, exitCode(err))
 	assert.Contains(t, err.Error(), "close failed")
@@ -1032,28 +1133,80 @@ func TestWriteOrInternalErrorClassifiesUnexpectedErrors(t *testing.T) {
 	assert.Equal(t, exitInternal, exitCode(err))
 }
 
-func TestLicenseSelectOptions(t *testing.T) {
-	opts := licenseSelectOptions()
-	require.NotEmpty(t, opts, "license picker should offer renderable licenses")
+func TestAuditSummaryOmitsFileList(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t)
+	out, err := runRoot(t, "audit", dir, "--deps=false", "--summary")
+	require.NoError(t, err)
+	assert.Contains(t, out, "by SPDX id:")
+	assert.NotContains(t, out, "\nsource files:")
+}
 
-	values := make([]string, 0, len(opts))
-	for _, opt := range opts {
-		values = append(values, opt.Value)
+func TestAuditGroupByLicense(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t)
+	out, err := runRoot(t, "audit", dir, "--deps=false", "--group-by", "license")
+	require.NoError(t, err)
+	assert.Contains(t, out, "source files by license:")
+}
+
+func TestAuditGroupByUnknownIsUsageError(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t)
+	stdout, stderr, code := executeRoot(t, "audit", dir, "--deps=false", "--group-by", "bogus")
+	assert.Equal(t, 2, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "unknown group-by dimension")
+}
+
+func TestCheckGroupByUnknownIsUsageError(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t)
+	stdout, stderr, code := executeRoot(t, "check", dir, "--deps=false", "--group-by", "bogus")
+	assert.Equal(t, 2, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "unknown group-by dimension")
+}
+
+func TestParseSort(t *testing.T) {
+	for _, tok := range []string{"", "key"} {
+		got, err := parseSort(tok)
+		require.NoError(t, err)
+		assert.False(t, got)
 	}
-	assert.Contains(t, values, "MIT")
-	assert.NotContains(t, values, "Zlib", "picker must not offer a license the tool cannot render")
+	got, err := parseSort("count")
+	require.NoError(t, err)
+	assert.True(t, got)
+
+	_, err = parseSort("bogus")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown sort")
+}
+
+func TestAuditSortAndUnknownSort(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t)
+
+	_, err := runRoot(t, "audit", dir, "--deps=false", "--sort", "count")
+	require.NoError(t, err)
+
+	_, stderr, code := executeRoot(t, "audit", dir, "--deps=false", "--sort", "bogus")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, stderr, "unknown sort")
 }
 
 // TestInitCommandInteractiveCollectError covers the init RunE branch where the
 // interactiveCollect seam returns an error: the command must propagate it verbatim
 // and write nothing. The seam is overridden so the failure is deterministic without
-// a real terminal (the huh wizard itself is excluded from coverage).
+// a real terminal (the Bubble Tea wizard itself is excluded from coverage).
 func TestInitCommandInteractiveCollectError(t *testing.T) {
 	isolateEnv(t)
 
 	orig := interactiveCollect
 	wantErr := errors.New("wizard aborted")
-	interactiveCollect = func(_ *initAnswers, _ bool) error { return wantErr }
+	interactiveCollect = func(_ string, a initwizard.Answers, _ bool) (initwizard.Answers, error) {
+		return a, wantErr
+	}
 	t.Cleanup(func() { interactiveCollect = orig })
 
 	dir := t.TempDir()
@@ -1063,6 +1216,63 @@ func TestInitCommandInteractiveCollectError(t *testing.T) {
 	// The collect failure must abort before any file is written.
 	_, statErr := os.Stat(filepath.Join(dir, ".license-tool.yaml"))
 	assert.True(t, os.IsNotExist(statErr), "no config should be written when collect fails")
+}
+
+func TestInitCommandConsumesCollectorAnswers(t *testing.T) {
+	isolateEnv(t)
+
+	orig := interactiveCollect
+	t.Cleanup(func() { interactiveCollect = orig })
+
+	dir := t.TempDir()
+	interactiveCollect = func(path string, initial initwizard.Answers, interactive bool) (initwizard.Answers, error) {
+		assert.Equal(t, dir, path)
+		assert.False(t, interactive)
+		assert.Equal(t, "MIT", initial.License.SPDXID)
+		assert.Equal(t, "Flag Holder", initial.Identity.Holder)
+		assert.Equal(t, "2026", initial.Identity.Year)
+		assert.Equal(t, "reuse", initial.HeaderStyle.Style)
+		assert.Equal(t, []string{"src/**"}, initial.Coverage.Include)
+		assert.Equal(t, []string{"vendor/**"}, initial.Coverage.Exclude)
+
+		return initwizard.Answers{
+			License: initwizard.LicenseAnswer{
+				SPDXID: "Apache-2.0",
+			},
+			Identity: initwizard.IdentityAnswer{
+				Holder: "Wizard Holder",
+				Year:   "current",
+			},
+			HeaderStyle:  initwizard.HeaderStyleAnswer{Style: "notice"},
+			LicenseFiles: initwizard.LicenseFilesAnswer{Manage: false},
+			Coverage: initwizard.CoverageAnswer{
+				Include: []string{"cmd/**"},
+				Exclude: []string{"generated/**"},
+			},
+		}, nil
+	}
+
+	out, err := runRoot(t, "init", dir,
+		"--license", "MIT",
+		"--holder", "Flag Holder",
+		"--year", "2026",
+		"--style", "reuse",
+		"--include", "src/**",
+		"--exclude", "vendor/**",
+	)
+	require.NoError(t, err)
+
+	target := filepath.Join(dir, ".license-tool.yaml")
+	assert.Contains(t, out, "wrote "+target)
+	cfg, err := config.LoadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "Apache-2.0", cfg.License)
+	assert.Equal(t, "Wizard Holder", cfg.Holder)
+	assert.Equal(t, model.YearCurrent, cfg.Year.Kind)
+	assert.Equal(t, model.StyleNotice, cfg.Style)
+	assert.False(t, cfg.ManageLicenseFile)
+	assert.Equal(t, []string{"cmd/**"}, cfg.Includes)
+	assert.Equal(t, []string{"generated/**"}, cfg.Excludes)
 }
 
 func TestSharedToFlags(t *testing.T) {
@@ -1166,4 +1376,16 @@ func (w closeErrorWriter) Write(p []byte) (int, error) {
 
 func (w closeErrorWriter) Close() error {
 	return w.closeErr
+}
+
+func TestAuditOnlyFilter(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t) // headerless main.go
+	out, err := runRoot(t, "audit", dir, "--deps=false", "--only", "missing")
+	require.NoError(t, err)
+	assert.Contains(t, out, "main.go")
+
+	_, stderr, code := executeRoot(t, "audit", dir, "--deps=false", "--only", "bogus")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, stderr, "unknown --only filter")
 }
