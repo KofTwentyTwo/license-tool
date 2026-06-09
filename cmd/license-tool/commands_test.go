@@ -1195,7 +1195,6 @@ func TestAuditSortAndUnknownSort(t *testing.T) {
 	assert.Contains(t, stderr, "unknown sort")
 }
 
-
 // TestInitCommandInteractiveCollectError covers the init RunE branch where the
 // interactiveCollect seam returns an error: the command must propagate it verbatim
 // and write nothing. The seam is overridden so the failure is deterministic without
