@@ -214,8 +214,6 @@ overwrite it unless `--force` is passed.
 --include <glob>       restrict to matching paths (repeatable)
 --exclude <glob>       skip matching paths (repeatable)
 --no-gitignore         do not honor .gitignore during enumeration
---quiet, -q            suppress non-essential output
---verbose, -v          verbose output
 ```
 
 ### Exit codes

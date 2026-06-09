@@ -32,8 +32,6 @@ type sharedFlags struct {
 	include     []string
 	exclude     []string
 	noGitignore bool
-	quiet       bool
-	verbose     bool
 }
 
 // newRootCmd assembles the full command tree. WHY a constructor that takes
@@ -55,8 +53,6 @@ func newRootCmd(info buildInfo) *cobra.Command {
 	pf.StringArrayVar(&shared.include, "include", nil, "glob of files to include (repeatable)")
 	pf.StringArrayVar(&shared.exclude, "exclude", nil, "glob of files to exclude (repeatable)")
 	pf.BoolVar(&shared.noGitignore, "no-gitignore", false, "do not inherit .gitignore on the non-git walk")
-	pf.BoolVarP(&shared.quiet, "quiet", "q", false, "suppress non-essential output")
-	pf.BoolVarP(&shared.verbose, "verbose", "v", false, "verbose diagnostic output")
 
 	root.AddCommand(
 		newAuditCmd(shared),

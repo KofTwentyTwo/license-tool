@@ -160,8 +160,27 @@ func TestNewRootCmd(t *testing.T) {
 	}
 
 	// Persistent flags are bound on the root.
-	for _, f := range []string{"config", "include", "exclude", "no-gitignore", "quiet", "verbose"} {
+	for _, f := range []string{"config", "include", "exclude", "no-gitignore"} {
 		assert.NotNil(t, root.PersistentFlags().Lookup(f), "persistent flag %q", f)
+	}
+
+	// The no-op --quiet/--verbose flags (and their -q/-v shorthands) were removed
+	// in #34: the CLI had no non-essential output to gate and no diagnostic stream
+	// to emit, so the flags advertised behavior they never delivered.
+	for _, f := range []string{"quiet", "verbose"} {
+		assert.Nil(t, root.PersistentFlags().Lookup(f), "removed persistent flag %q must not be registered", f)
+	}
+}
+
+func TestQuietVerboseFlagsRemoved(t *testing.T) {
+	isolateEnv(t)
+	dir := fixtureDir(t)
+	for _, arg := range []string{"--quiet", "-q", "--verbose", "-v"} {
+		t.Run(arg, func(t *testing.T) {
+			_, stderr, code := executeRoot(t, "audit", arg, dir)
+			assert.Equal(t, exitUsage, code, "removed flag %q should yield a usage error", arg)
+			assert.Contains(t, stderr, "unknown")
+		})
 	}
 }
 
