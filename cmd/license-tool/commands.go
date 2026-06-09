@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -83,6 +84,42 @@ type auditFlags struct {
 	noDeps      bool
 	resolveDeps string
 	failOn      []string
+	summary     bool
+	groupBy     string
+	sort        string
+	depth       int
+	only        string
+}
+
+// renderOptions parses the summary/group-by/sort flags into report.RenderOptions,
+// surfacing an unknown --group-by or --sort value as a usage error.
+func (f auditFlags) renderOptions() (report.RenderOptions, error) {
+	dim, err := report.ParseGroupBy(f.groupBy)
+	if err != nil {
+		return report.RenderOptions{}, err
+	}
+	byCount, err := parseSort(f.sort)
+	if err != nil {
+		return report.RenderOptions{}, err
+	}
+	only, err := report.ParseOnly(f.only)
+	if err != nil {
+		return report.RenderOptions{}, err
+	}
+	return report.RenderOptions{Summary: f.summary, GroupBy: dim, SortByCount: byCount, DirectoryDepth: f.depth, Only: only}, nil
+}
+
+// parseSort maps the --sort token to the by-count flag. "" and "key" sort
+// alphabetically; "count" sorts by descending frequency.
+func parseSort(raw string) (bool, error) {
+	switch raw {
+	case "", "key":
+		return false, nil
+	case "count":
+		return true, nil
+	default:
+		return false, fmt.Errorf("audit: unknown sort %q (expected key|count)", raw)
+	}
 }
 
 func (f auditFlags) includeDeps() bool {
@@ -108,6 +145,10 @@ func newAuditCmd(shared *sharedFlags) *cobra.Command {
 			if validateErr := validateResolveDeps(f.resolveDeps); validateErr != nil {
 				return usageError(validateErr)
 			}
+			renderOpts, err := f.renderOptions()
+			if err != nil {
+				return usageError(err)
+			}
 			r, err := report.Audit(path, cfg, report.Options{
 				Format:            format,
 				IncludeDeps:       f.includeDeps(),
@@ -117,7 +158,7 @@ func newAuditCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return internalError(err)
 			}
-			if err := renderCommandReport(cmd, f.output, r, format); err != nil {
+			if err := renderCommandReport(cmd, f.output, r, format, renderOpts); err != nil {
 				return err
 			}
 			return nil
@@ -153,6 +194,10 @@ func newCheckCmd(shared *sharedFlags) *cobra.Command {
 			if validateErr := validateResolveDeps(f.resolveDeps); validateErr != nil {
 				return usageError(validateErr)
 			}
+			renderOpts, err := f.renderOptions()
+			if err != nil {
+				return usageError(err)
+			}
 			r, err := report.Audit(path, cfg, report.Options{
 				Format:            format,
 				IncludeDeps:       f.includeDeps(),
@@ -162,7 +207,7 @@ func newCheckCmd(shared *sharedFlags) *cobra.Command {
 			if err != nil {
 				return internalError(err)
 			}
-			if err := renderCommandReport(cmd, f.output, r, format); err != nil {
+			if err := renderCommandReport(cmd, f.output, r, format, renderOpts); err != nil {
 				return err
 			}
 			if !r.Passed {
@@ -184,6 +229,11 @@ func bindAuditFlags(cmd *cobra.Command, f *auditFlags, isCheck bool) {
 	cmd.Flags().BoolVar(&f.deps, "deps", true, "resolve dependency licenses")
 	cmd.Flags().BoolVar(&f.noDeps, "no-deps", false, "skip dependency license resolution")
 	cmd.Flags().StringVar(&f.resolveDeps, "resolve-deps", "ondisk", "dependency resolution tier: ondisk|tool|off")
+	cmd.Flags().BoolVar(&f.summary, "summary", false, "counts only: omit the per-file and per-dependency lists")
+	cmd.Flags().StringVar(&f.groupBy, "group-by", "", "group source files by: license|category|type|directory")
+	cmd.Flags().StringVar(&f.sort, "sort", "key", "rollup/group order: key|count")
+	cmd.Flags().IntVar(&f.depth, "depth", 1, "directory grouping depth (with --group-by directory)")
+	cmd.Flags().StringVar(&f.only, "only", "", "list only problem files: missing|unknown|copyleft|violations (comma-separated)")
 	if isCheck {
 		cmd.Flags().StringArrayVar(&f.failOn, "fail-on", []string{"missing-header", "unknown-license", "policy-violation"}, "conditions that cause a non-zero exit")
 	}
@@ -310,9 +360,9 @@ var createReportFile = func(name string) (io.WriteCloser, error) {
 	return os.Create(name)
 }
 
-func renderCommandReport(cmd *cobra.Command, output string, r model.Report, format report.Format) error {
+func renderCommandReport(cmd *cobra.Command, output string, r model.Report, format report.Format, opts report.RenderOptions) error {
 	if output == "" {
-		if err := report.Render(cmd.OutOrStdout(), r, format); err != nil {
+		if err := report.RenderWithOptions(cmd.OutOrStdout(), r, format, opts); err != nil {
 			return internalError(err)
 		}
 		return nil
@@ -322,7 +372,7 @@ func renderCommandReport(cmd *cobra.Command, output string, r model.Report, form
 	if err != nil {
 		return internalError(fmt.Errorf("report: create output %s: %w", output, err))
 	}
-	renderErr := report.Render(f, r, format)
+	renderErr := report.RenderWithOptions(f, r, format, opts)
 	closeErr := f.Close()
 	if renderErr != nil {
 		return internalError(renderErr)
@@ -490,6 +540,10 @@ func newVersionCmd(info buildInfo) *cobra.Command {
 // content (the report layer needs the bytes for detection); Detect is the detector
 // directly; ResolveDeps iterates the ecosystem resolvers detected at the root and
 // concatenates their findings (unresolved entries included, never guessed).
+// reasonToolConfig is the skip reason recorded for the tool's own config file, so it
+// is shown in the file listing but excluded from source/header coverage tallies.
+const reasonToolConfig = "tool config"
+
 func buildAuditPipeline(cfg model.Config, shared *sharedFlags) report.Pipeline {
 	classify := config.ContentLookupFunc(cfg)
 	return report.Pipeline{
@@ -510,7 +564,15 @@ func buildAuditPipeline(cfg model.Config, shared *sharedFlags) report.Pipeline {
 					Skip:       e.Skip,
 					SkipReason: e.SkipReason,
 				}
-				if !e.Skip {
+				// The tool's own .license-tool.yaml is metadata, not coverable source: it
+				// never carries a managed header, so counting it would inflate
+				// sourceTotal/sourceMissing. Mark it skipped (still listed, with a reason)
+				// rather than counting it as a headerless source file.
+				if !sf.Skip && path.Base(e.Path) == config.RepoConfigName {
+					sf.Skip = true
+					sf.SkipReason = reasonToolConfig
+				}
+				if !sf.Skip {
 					content, rerr := os.ReadFile(e.AbsPath)
 					if rerr != nil {
 						sf.Skip = true

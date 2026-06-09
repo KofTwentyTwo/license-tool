@@ -37,7 +37,7 @@ func TestBuildFindingsSourceCoverageAndLicenseMix(t *testing.T) {
 	assert.Equal(t, 1, f.LicenseCounts["GPL-3.0-or-later"])
 
 	// License mix is sorted by id, with the missing bucket last.
-	assert.Equal(t, "GPL-3.0-or-later 1, MIT 2, none 1", f.licenseSummary())
+	assert.Equal(t, "GPL-3.0-or-later 1, MIT 2, (no-header) 1", f.licenseSummary())
 }
 
 func TestBuildFindingsUnknownAndCopyleft(t *testing.T) {
@@ -118,7 +118,7 @@ func TestRenderFindingsBlock(t *testing.T) {
 
 	assert.Contains(t, out, "findings:")
 	assert.Contains(t, out, "source files: 2 (headered 1, missing 1)")
-	assert.Contains(t, out, "license types: MIT 1, none 1")
+	assert.Contains(t, out, "license types: MIT 1, (no-header) 1")
 	assert.Contains(t, out, "unknown/unrecognized: 0")
 	assert.Contains(t, out, "copyleft: none")
 	assert.Contains(t, out, "dependencies: 1 (resolved 1, unresolved 0)")

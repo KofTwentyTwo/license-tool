@@ -52,6 +52,12 @@ type Findings struct {
 	Passed bool
 	// Violations are the repo-level violation tokens, sorted, surfaced when failing.
 	Violations []string
+
+	// RiskLevel is the worst obligation severity among the headered source licenses
+	// ("high"|"medium"|"low"|"none"), so a reader or model can branch on one value.
+	RiskLevel string
+	// WorstCategory is the license category contributing RiskLevel (empty when none).
+	WorstCategory string
 }
 
 // buildFindings folds a finished model.Report into a Findings summary. It is pure
@@ -64,6 +70,7 @@ func buildFindings(r model.Report) Findings {
 	}
 
 	copyleftSeen := map[string]bool{}
+	worst := worstRisk{}
 	for _, fr := range r.Files {
 		// Coverable means a file that participates in license management. Skipped
 		// files (binary, uncommentable, unknown type) carry no managed header and are
@@ -84,10 +91,12 @@ func buildFindings(r model.Report) Findings {
 				f.UnknownCount++
 			}
 
-			switch categoryToken(id) {
-			case model.CategoryWeakCopyleft.String(),
-				model.CategoryStrongCopyleft.String(),
-				model.CategoryNetworkCopyleft.String():
+			cat := classifyCategory(id)
+			worst.observe(cat)
+			switch cat {
+			case model.CategoryWeakCopyleft,
+				model.CategoryStrongCopyleft,
+				model.CategoryNetworkCopyleft:
 				copyleftSeen[id] = true
 			}
 		} else {
@@ -96,6 +105,7 @@ func buildFindings(r model.Report) Findings {
 	}
 
 	f.Copyleft = sortedKeys(copyleftSeen)
+	f.RiskLevel, f.WorstCategory = worst.result()
 
 	if len(r.Dependencies) > 0 {
 		f.DepsScanned = true
@@ -129,7 +139,7 @@ func (f Findings) licenseSummary() string {
 		parts = append(parts, fmt.Sprintf("%s %d", id, f.LicenseCounts[id]))
 	}
 	if f.SourceMissing > 0 {
-		parts = append(parts, fmt.Sprintf("none %d", f.SourceMissing))
+		parts = append(parts, fmt.Sprintf("%s %d", noLicenseKey, f.SourceMissing))
 	}
 	if len(parts) == 0 {
 		return "(none)"
@@ -166,11 +176,56 @@ func renderFindings(bw *errWriter, f Findings) {
 	bw.printf("  license types: %s\n", f.licenseSummary())
 	bw.printf("  unknown/unrecognized: %d\n", f.UnknownCount)
 	bw.printf("  copyleft: %s\n", f.copyleftSummary())
+	bw.printf("  risk: %s\n", f.riskSummary())
 	if f.DepsScanned {
 		bw.printf("  dependencies: %d (resolved %d, unresolved %d)\n", f.DepsTotal, f.DepsResolved, f.DepsUnresolved)
 	}
 	bw.printf("  policy: %s\n", f.policySummary())
 	bw.printf("\n")
+}
+
+// worstRisk tracks the highest-severity license category observed across headered
+// source files, for the findings RiskLevel. Ties on risk rank break toward the higher
+// Category enum so the result is deterministic.
+type worstRisk struct {
+	cat  model.Category
+	have bool
+}
+
+func (w *worstRisk) observe(c model.Category) {
+	if !w.have || riskRank(c) > riskRank(w.cat) || (riskRank(c) == riskRank(w.cat) && c > w.cat) {
+		w.cat = c
+		w.have = true
+	}
+}
+
+func (w worstRisk) result() (level, category string) {
+	if !w.have {
+		return "none", ""
+	}
+	return w.cat.Risk(), w.cat.String()
+}
+
+// riskRank ranks a category's obligation severity for "worst" comparison.
+func riskRank(c model.Category) int {
+	switch c.Risk() {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// riskSummary renders the risk level and the worst category, or "none".
+func (f Findings) riskSummary() string {
+	if f.WorstCategory == "" {
+		return "none"
+	}
+	return fmt.Sprintf("%s (%s)", f.RiskLevel, f.WorstCategory)
 }
 
 // sortedKeys returns the keys of a string-keyed map in ascending order, the canonical

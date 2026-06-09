@@ -23,9 +23,11 @@ import (
 	"github.com/KofTwentyTwo/license-tool/internal/spdx"
 )
 
-// repoConfigName is the committed, per-repo config file discovered at the scan
-// root. It doubles as the apply input and the check expectation for a repo.
-const repoConfigName = ".license-tool.yaml"
+// RepoConfigName is the committed, per-repo config file discovered at the scan
+// root. It doubles as the apply input and the check expectation for a repo, and is
+// the basename the audit excludes from source/header coverage (tool metadata, not
+// coverable source).
+const RepoConfigName = ".license-tool.yaml"
 
 // userConfigRel is the user/global config path relative to $XDG_CONFIG_HOME.
 const userConfigRel = "license-tool/config.yaml"
@@ -238,7 +240,7 @@ var renderFile = RenderFile
 // committed config, so an existing target is a hard error unless the caller opted in
 // with force (the --force flag). The 0o644 mode matches a normal committed text file.
 func WriteFile(path string, cfg model.Config, force bool) (string, error) {
-	target := filepath.Join(path, repoConfigName)
+	target := filepath.Join(path, RepoConfigName)
 	if !force && fileExists(target) {
 		return "", fmt.Errorf("config: %s already exists (use --force)", target)
 	}
@@ -674,7 +676,7 @@ func repoConfigPath(scanPath, configFlag string) (path string, explicit bool) {
 	if configFlag != "" {
 		return configFlag, true
 	}
-	return filepath.Join(scanPath, repoConfigName), false
+	return filepath.Join(scanPath, RepoConfigName), false
 }
 
 // fileExists reports whether path names an existing regular-readable file.

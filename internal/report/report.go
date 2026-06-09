@@ -31,7 +31,7 @@ const Disclaimer = "This tool reports and enforces license metadata; it is not l
 // empty string: an empty map key is invisible in rendered output and silently
 // indistinguishable from "absent", so missing headers would never surface in the
 // by-license breakdown. A named bucket makes the gap explicit and sortable.
-const noLicenseKey = "(none)"
+const noLicenseKey = "(no-header)"
 
 // Format selects the output rendering.
 type Format int
@@ -186,10 +186,16 @@ func Build(root string, cfg model.Config, files []model.FileResult, deps []model
 // vendored curated set. Ids outside the curated rendering set classify as unknown,
 // which is the honest answer: we have no vendored metadata to categorize them.
 func categoryToken(id string) string {
+	return classifyCategory(id).String()
+}
+
+// classifyCategory maps an SPDX id to its model.Category via the vendored snapshot;
+// ids outside the curated set are CategoryUnknown.
+func classifyCategory(id string) model.Category {
 	if lic, ok := spdx.Lookup(id); ok {
-		return lic.Category.String()
+		return lic.Category
 	}
-	return model.CategoryUnknown.String()
+	return model.CategoryUnknown
 }
 
 // conditionFromToken maps a stable fail_on token back to its FailCondition. It is
@@ -285,6 +291,7 @@ func Audit(path string, cfg model.Config, opts Options, pipe Pipeline) (model.Re
 	}
 
 	files := make([]model.FileResult, 0, len(sources))
+	var allViolations []policy.Violation
 	for _, s := range sources {
 		fr := model.FileResult{
 			Path:     s.Path,
@@ -309,12 +316,15 @@ func Audit(path string, cfg model.Config, opts Options, pipe Pipeline) (model.Re
 		}
 
 		// Per-file policy verdicts attach their stable tokens to the file so the
-		// by-file view and the fail-on evaluation both see them.
-		for _, v := range policy.EvaluateFile(cfg.Policy, fr) {
+		// by-file view and the fail-on evaluation both see them; the full structs are
+		// retained for the attributable ViolationDetails.
+		fileViolations := policy.EvaluateFile(cfg.Policy, fr)
+		for _, v := range fileViolations {
 			fr.Violations = append(fr.Violations, v.Token())
 		}
 		sort.Strings(fr.Violations)
 		fr.Violations = dedupeStrings(fr.Violations)
+		allViolations = append(allViolations, fileViolations...)
 
 		files = append(files, fr)
 	}
@@ -335,8 +345,53 @@ func Audit(path string, cfg model.Config, opts Options, pipe Pipeline) (model.Re
 
 	// Repo-level checks run over the distinct SPDX ids actually found in source.
 	repoViolations = append(repoViolations, policy.EvaluateRepo(cfg.Policy, distinctSourceIDs(files))...)
+	allViolations = append(allViolations, repoViolations...)
 
-	return Build(path, cfg, files, deps, repoViolations), nil
+	r := Build(path, cfg, files, deps, repoViolations)
+	r.ViolationDetails = toViolationDetails(allViolations)
+	return r, nil
+}
+
+// toViolationDetails maps the full policy.Violation set (file + dependency + repo) to
+// attributable model.ViolationDetail records, sorted and de-duplicated for stable
+// output. WHY the report layer owns this mapping: model stays free of a policy import,
+// and the rich attribution policy already produces is preserved instead of being
+// flattened to bare tokens.
+func toViolationDetails(vs []policy.Violation) []model.ViolationDetail {
+	out := make([]model.ViolationDetail, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, model.ViolationDetail{
+			Condition: v.Condition,
+			SPDXID:    v.SPDXID,
+			Path:      v.Path,
+			Message:   v.Message,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Condition != out[j].Condition {
+			return out[i].Condition < out[j].Condition
+		}
+		if out[i].Path != out[j].Path {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].Message < out[j].Message
+	})
+	return dedupeViolationDetails(out)
+}
+
+// dedupeViolationDetails removes adjacent duplicate findings; the input is pre-sorted,
+// so a single linear pass suffices.
+func dedupeViolationDetails(in []model.ViolationDetail) []model.ViolationDetail {
+	if len(in) == 0 {
+		return nil
+	}
+	out := in[:1]
+	for _, v := range in[1:] {
+		if v != out[len(out)-1] {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // distinctSourceIDs returns the sorted, unique set of SPDX ids detected across the
@@ -356,17 +411,65 @@ func distinctSourceIDs(files []model.FileResult) []string {
 	return ids
 }
 
-// Render writes the report in the requested format to w, prefixing the disclaimer
-// where appropriate. All three renderers walk the model through a sorted view, so
-// output is deterministic for identical inputs regardless of input ordering.
+// RenderOptions tunes the human/JSON rendering of a report. The zero value is the
+// default full report (every renderer's historical behavior).
+type RenderOptions struct {
+	// Summary suppresses the per-file list, the per-dependency list, and pending
+	// diffs, leaving findings, the count rollups, and policy violations.
+	Summary bool
+	// GroupBy organizes the source-file listing under each value of a dimension
+	// instead of a flat list. GroupNone is the flat default.
+	GroupBy GroupDimension
+	// SortByCount orders the count rollups and groups by descending count (ties by
+	// key) instead of the default alphabetical key order.
+	SortByCount bool
+	// DirectoryDepth is how many leading path segments form a directory group key
+	// (min 1); only meaningful with GroupBy == GroupDirectory.
+	DirectoryDepth int
+	// Only restricts the source-file listing to problem files; empty lists all.
+	Only []OnlyFilter
+}
+
+// spec builds the GroupSpec for the current options.
+func (o RenderOptions) spec() GroupSpec {
+	return GroupSpec{By: o.GroupBy, Depth: o.DirectoryDepth}
+}
+
+// listingReport returns r with its Files filtered by the --only set, for the
+// (flat or grouped) file listing. The count rollups and findings stay derived from
+// the full report, so --only narrows what is listed without distorting the totals.
+func (o RenderOptions) listingReport(r model.Report) model.Report {
+	if len(o.Only) == 0 {
+		return r
+	}
+	filtered := make([]model.FileResult, 0, len(r.Files))
+	for _, fr := range r.Files {
+		if keepFile(fr, o.Only) {
+			filtered = append(filtered, fr)
+		}
+	}
+	r.Files = filtered
+	return r
+}
+
+// Render writes the report in the requested format to w with default options. It is
+// the backward-compatible entry point; callers needing summary/group-by use
+// RenderWithOptions.
 func Render(w io.Writer, r model.Report, format Format) error {
+	return RenderWithOptions(w, r, format, RenderOptions{})
+}
+
+// RenderWithOptions writes the report honoring opts. All three renderers walk the
+// model through a sorted view, so output is deterministic for identical inputs
+// regardless of input ordering.
+func RenderWithOptions(w io.Writer, r model.Report, format Format, opts RenderOptions) error {
 	switch format {
 	case FormatText:
-		return renderText(w, r)
+		return renderText(w, r, opts)
 	case FormatJSON:
-		return renderJSON(w, r)
+		return renderJSON(w, r, opts)
 	case FormatMarkdown:
-		return renderMarkdown(w, r)
+		return renderMarkdown(w, r, opts)
 	default:
 		return fmt.Errorf("report: cannot render unknown format %d", format)
 	}
@@ -410,7 +513,7 @@ func classifier(cfg model.Config) func(string) (model.FileType, bool) {
 
 // ----- text renderer -----
 
-func renderText(w io.Writer, r model.Report) error {
+func renderText(w io.Writer, r model.Report, opts RenderOptions) error {
 	bw := &errWriter{w: w}
 
 	bw.printf("license-tool audit report\n")
@@ -425,50 +528,56 @@ func renderText(w io.Writer, r model.Report) error {
 
 	bw.printf("result: %s\n\n", passLabel(r.Passed))
 
-	bw.printf("by SPDX id:\n")
-	if len(r.LicenseCounts) == 0 {
-		bw.printf("  (no managed source files)\n")
-	}
-	for _, kv := range sortedCounts(r.LicenseCounts) {
-		bw.printf("  %-24s %d\n", kv.key, kv.count)
-	}
-	bw.printf("\n")
+	// The count rollups are always shown (cheap, and the core summary).
+	renderCountSection(bw, "by SPDX id", r.LicenseCounts, "(no managed source files)", opts.SortByCount)
+	renderCountSection(bw, "by category", r.CategoryCounts, "(none)", opts.SortByCount)
+	renderCountSection(bw, "by file type", r.FileTypeCounts, "(none)", opts.SortByCount)
 
-	bw.printf("by category:\n")
-	if len(r.CategoryCounts) == 0 {
-		bw.printf("  (none)\n")
+	// Source-file listing: flat by default, grouped under --group-by, omitted under
+	// --summary (a bare --summary with no group-by shows only the rollups above).
+	// Incompatibility risk is repo-wide, so derive it from the full report before
+	// --only narrows the listing; otherwise a filtered listing would understate a
+	// group's policy-aware risk.
+	incompatIDs := incompatibleIDs(distinctSourceIDs(r.Files))
+	lr := opts.listingReport(r)
+	switch {
+	case opts.GroupBy != GroupNone:
+		renderGroupedFiles(bw, lr, opts, incompatIDs)
+	case !opts.Summary:
+		bw.printf("source files: %d\n", len(lr.Files))
+		for _, fr := range sortedFiles(lr.Files) {
+			bw.printf("  %s\n", fileLine(fr))
+		}
+		bw.printf("\n")
 	}
-	for _, kv := range sortedCounts(r.CategoryCounts) {
-		bw.printf("  %-24s %d\n", kv.key, kv.count)
-	}
-	bw.printf("\n")
 
-	bw.printf("by file type:\n")
-	if len(r.FileTypeCounts) == 0 {
-		bw.printf("  (none)\n")
+	// Diffs and the per-dependency list are detail, suppressed in summary mode; the
+	// findings block already reports dependency resolution counts.
+	if !opts.Summary {
+		renderTextDiffs(bw, r.Files)
+		bw.printf("dependencies: %d\n", len(r.Dependencies))
+		for _, dep := range sortedDeps(r.Dependencies) {
+			bw.printf("  %s\n", depLine(dep))
+		}
+		bw.printf("\n")
 	}
-	for _, kv := range sortedCounts(r.FileTypeCounts) {
-		bw.printf("  %-24s %d\n", kv.key, kv.count)
+
+	renderTextViolations(bw, r)
+
+	return bw.err
+}
+
+// renderTextViolations prints the attributable findings (condition + message) when
+// available, falling back to the legacy repo-level tokens otherwise.
+func renderTextViolations(bw *errWriter, r model.Report) {
+	if len(r.ViolationDetails) > 0 {
+		bw.printf("policy violations:\n")
+		for _, v := range r.ViolationDetails {
+			bw.printf("  [%s] %s\n", v.Condition, v.Message)
+		}
+		bw.printf("\n")
+		return
 	}
-	bw.printf("\n")
-
-	// Source-vs-dependency split: source files come from Files, dependencies from
-	// Dependencies. Both are surfaced so the reader sees the two halves the
-	// requirements call out.
-	bw.printf("source files: %d\n", len(r.Files))
-	for _, fr := range sortedFiles(r.Files) {
-		bw.printf("  %s\n", fileLine(fr))
-	}
-	bw.printf("\n")
-
-	renderTextDiffs(bw, r.Files)
-
-	bw.printf("dependencies: %d\n", len(r.Dependencies))
-	for _, dep := range sortedDeps(r.Dependencies) {
-		bw.printf("  %s\n", depLine(dep))
-	}
-	bw.printf("\n")
-
 	if len(r.Violations) > 0 {
 		bw.printf("policy violations:\n")
 		for _, v := range r.Violations {
@@ -476,8 +585,76 @@ func renderText(w io.Writer, r model.Report) error {
 		}
 		bw.printf("\n")
 	}
+}
 
-	return bw.err
+// renderCountSection prints a "<title>:" header followed by the sorted counts, or
+// emptyLabel when the map is empty.
+func renderCountSection(bw *errWriter, title string, counts map[string]int, emptyLabel string, byCount bool) {
+	bw.printf("%s:\n", title)
+	if len(counts) == 0 {
+		bw.printf("  %s\n", emptyLabel)
+		bw.printf("\n")
+		return
+	}
+	total := sumCounts(counts)
+	for _, kv := range sortedCountsBy(counts, byCount) {
+		bw.printf("  %-24s %4d  (%s)\n", kv.key, kv.count, percent(kv.count, total))
+	}
+	bw.printf("  %-24s %4d\n", "total", total)
+	bw.printf("\n")
+}
+
+// breakdownSummary renders a license breakdown map as "id n, id n" in key order.
+func breakdownSummary(counts map[string]int) string {
+	parts := make([]string, 0, len(counts))
+	for _, kv := range sortedCounts(counts) {
+		parts = append(parts, fmt.Sprintf("%s %d", kv.key, kv.count))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// sumCounts totals a count map.
+func sumCounts(counts map[string]int) int {
+	total := 0
+	for _, v := range counts {
+		total += v
+	}
+	return total
+}
+
+// percent formats n as a one-decimal percentage of total ("55.6%"); 0/0 is "0.0%".
+func percent(n, total int) string {
+	if total == 0 {
+		return "0.0%"
+	}
+	return fmt.Sprintf("%.1f%%", float64(n)*100/float64(total))
+}
+
+// renderGroupedFiles prints the source files grouped under opts.GroupBy. Under
+// --summary it prints per-group counts only; otherwise it nests the file lines. A
+// trailing note reports skipped (uneditable) files, which are never grouped.
+func renderGroupedFiles(bw *errWriter, r model.Report, opts RenderOptions, incompatIDs map[string]bool) {
+	groups, skipped := groupFilesWith(r, opts.spec(), incompatIDs)
+	sortGroups(groups, opts.SortByCount)
+	bw.printf("source files by %s:\n", opts.GroupBy)
+	if len(groups) == 0 {
+		bw.printf("  (no managed source files)\n")
+	}
+	for _, g := range groups {
+		bw.printf("  %s (%d) [risk: %s]\n", g.Key, g.Count, g.Risk)
+		if opts.GroupBy != GroupLicense {
+			bw.printf("    licenses: %s\n", breakdownSummary(g.Licenses))
+		}
+		if !opts.Summary {
+			for _, fr := range g.Files {
+				bw.printf("    %s\n", fileLine(fr))
+			}
+		}
+	}
+	if skipped > 0 {
+		bw.printf("  (skipped: %d)\n", skipped)
+	}
+	bw.printf("\n")
 }
 
 func renderTextDiffs(bw *errWriter, files []model.FileResult) {
@@ -524,7 +701,7 @@ func depLine(dep model.DependencyLicense) string {
 
 // ----- markdown renderer -----
 
-func renderMarkdown(w io.Writer, r model.Report) error {
+func renderMarkdown(w io.Writer, r model.Report, opts RenderOptions) error {
 	bw := &errWriter{w: w}
 
 	bw.printf("# license-tool audit report\n\n")
@@ -535,42 +712,53 @@ func renderMarkdown(w io.Writer, r model.Report) error {
 	bw.printf("- **Style:** `%s`\n", r.Config.Style)
 	bw.printf("- **Result:** %s\n\n", passLabel(r.Passed))
 
-	bw.printf("## By SPDX id\n\n")
-	bw.printf("| SPDX id | Files |\n| --- | --- |\n")
-	for _, kv := range sortedCounts(r.LicenseCounts) {
-		bw.printf("| `%s` | %d |\n", kv.key, kv.count)
-	}
-	bw.printf("\n")
+	renderMarkdownFindings(bw, buildFindings(r))
 
-	bw.printf("## By category\n\n")
-	bw.printf("| Category | Files |\n| --- | --- |\n")
-	for _, kv := range sortedCounts(r.CategoryCounts) {
-		bw.printf("| %s | %d |\n", kv.key, kv.count)
-	}
-	bw.printf("\n")
+	renderMarkdownCountTable(bw, "By SPDX id", "SPDX id", r.LicenseCounts, opts.SortByCount)
+	renderMarkdownCountTable(bw, "By category", "Category", r.CategoryCounts, opts.SortByCount)
+	renderMarkdownCountTable(bw, "By file type", "File type", r.FileTypeCounts, opts.SortByCount)
 
-	bw.printf("## By file type\n\n")
-	bw.printf("| File type | Files |\n| --- | --- |\n")
-	for _, kv := range sortedCounts(r.FileTypeCounts) {
-		bw.printf("| %s | %d |\n", kv.key, kv.count)
+	incompatIDs := incompatibleIDs(distinctSourceIDs(r.Files))
+	lr := opts.listingReport(r)
+	switch {
+	case opts.GroupBy != GroupNone:
+		renderMarkdownGroups(bw, lr, opts, incompatIDs)
+	case !opts.Summary:
+		bw.printf("## Source files (%d)\n\n", len(lr.Files))
+		bw.printf("| Path | File type | Status |\n| --- | --- | --- |\n")
+		for _, fr := range sortedFiles(lr.Files) {
+			bw.printf("| `%s` | %s | %s |\n", fr.Path, orNone(fr.FileType), mdFileStatus(fr))
+		}
+		bw.printf("\n")
 	}
-	bw.printf("\n")
 
-	bw.printf("## Source files (%d)\n\n", len(r.Files))
-	bw.printf("| Path | File type | Status |\n| --- | --- | --- |\n")
-	for _, fr := range sortedFiles(r.Files) {
-		bw.printf("| `%s` | %s | %s |\n", fr.Path, orNone(fr.FileType), mdFileStatus(fr))
+	if !opts.Summary {
+		bw.printf("## Dependencies (%d)\n\n", len(r.Dependencies))
+		bw.printf("| Ecosystem | Name | Version | License | Resolution |\n| --- | --- | --- | --- | --- |\n")
+		for _, dep := range sortedDeps(r.Dependencies) {
+			bw.printf("| %s | `%s` | %s | `%s` | %s |\n",
+				dep.Ecosystem, orNone(dep.Name), orNone(dep.Version), orNone(dep.SPDXID), dep.Resolution)
+		}
+		bw.printf("\n")
 	}
-	bw.printf("\n")
 
-	bw.printf("## Dependencies (%d)\n\n", len(r.Dependencies))
-	bw.printf("| Ecosystem | Name | Version | License | Resolution |\n| --- | --- | --- | --- | --- |\n")
-	for _, dep := range sortedDeps(r.Dependencies) {
-		bw.printf("| %s | `%s` | %s | `%s` | %s |\n",
-			dep.Ecosystem, orNone(dep.Name), orNone(dep.Version), orNone(dep.SPDXID), dep.Resolution)
+	renderMarkdownViolations(bw, r)
+
+	return bw.err
+}
+
+// renderMarkdownViolations renders an attributable findings table (condition, license,
+// location, detail) when details are present, falling back to the legacy token list.
+func renderMarkdownViolations(bw *errWriter, r model.Report) {
+	if len(r.ViolationDetails) > 0 {
+		bw.printf("## Policy violations\n\n")
+		bw.printf("| Condition | License | Location | Detail |\n| --- | --- | --- | --- |\n")
+		for _, v := range r.ViolationDetails {
+			bw.printf("| %s | `%s` | %s | %s |\n", v.Condition, orNone(v.SPDXID), orNone(v.Path), v.Message)
+		}
+		bw.printf("\n")
+		return
 	}
-	bw.printf("\n")
-
 	if len(r.Violations) > 0 {
 		bw.printf("## Policy violations\n\n")
 		for _, v := range r.Violations {
@@ -578,8 +766,74 @@ func renderMarkdown(w io.Writer, r model.Report) error {
 		}
 		bw.printf("\n")
 	}
+}
 
-	return bw.err
+// renderMarkdownFindings renders the at-a-glance summary (coverage, license mix,
+// risk, copyleft, dependency resolution, policy) so Markdown reports carry the same
+// overview the text renderer does.
+func renderMarkdownFindings(bw *errWriter, f Findings) {
+	bw.printf("## Findings\n\n")
+	bw.printf("- **Source files:** %d (headered %d, missing %d)\n", f.SourceTotal, f.SourceHeadered, f.SourceMissing)
+	bw.printf("- **License types:** %s\n", f.licenseSummary())
+	bw.printf("- **Risk:** %s\n", f.riskSummary())
+	bw.printf("- **Copyleft:** %s\n", f.copyleftSummary())
+	bw.printf("- **Unknown/unrecognized:** %d\n", f.UnknownCount)
+	if f.DepsScanned {
+		bw.printf("- **Dependencies:** %d (resolved %d, unresolved %d)\n", f.DepsTotal, f.DepsResolved, f.DepsUnresolved)
+	}
+	bw.printf("- **Policy:** %s\n\n", f.policySummary())
+}
+
+// renderMarkdownCountTable renders one count rollup as a table with a percentage
+// column and a total row.
+func renderMarkdownCountTable(bw *errWriter, heading, keyHeader string, counts map[string]int, byCount bool) {
+	bw.printf("## %s\n\n", heading)
+	bw.printf("| %s | Files | %% |\n| --- | --- | --- |\n", keyHeader)
+	total := sumCounts(counts)
+	for _, kv := range sortedCountsBy(counts, byCount) {
+		bw.printf("| `%s` | %d | %s |\n", kv.key, kv.count, percent(kv.count, total))
+	}
+	bw.printf("| **total** | **%d** | |\n\n", total)
+}
+
+// renderMarkdownGroups renders the grouped source-file view. Under --summary it emits
+// a single per-group count table; otherwise a per-group heading with a file table.
+func renderMarkdownGroups(bw *errWriter, r model.Report, opts RenderOptions, incompatIDs map[string]bool) {
+	groups, skipped := groupFilesWith(r, opts.spec(), incompatIDs)
+	sortGroups(groups, opts.SortByCount)
+	bw.printf("## Source files by %s\n\n", opts.GroupBy)
+
+	if opts.Summary {
+		bw.printf("| %s | Files | Risk |\n| --- | --- | --- |\n", titleCase(opts.GroupBy.String()))
+		for _, g := range groups {
+			bw.printf("| `%s` | %d | %s |\n", g.Key, g.Count, g.Risk)
+		}
+		bw.printf("\n")
+	} else {
+		for _, g := range groups {
+			bw.printf("### `%s` (%d) — risk: %s\n\n", g.Key, g.Count, g.Risk)
+			if opts.GroupBy != GroupLicense {
+				bw.printf("Licenses: %s\n\n", breakdownSummary(g.Licenses))
+			}
+			bw.printf("| Path | File type | Status |\n| --- | --- | --- |\n")
+			for _, fr := range g.Files {
+				bw.printf("| `%s` | %s | %s |\n", fr.Path, orNone(fr.FileType), mdFileStatus(fr))
+			}
+			bw.printf("\n")
+		}
+	}
+
+	if skipped > 0 {
+		bw.printf("_Skipped (uneditable): %d_\n\n", skipped)
+	}
+}
+
+// titleCase upper-cases the first byte of an ASCII word for a table header.
+func titleCase(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 func mdFileStatus(fr model.FileResult) string {
@@ -603,17 +857,54 @@ func mdFileStatus(fr model.FileResult) string {
 // decouples wire compatibility from internal refactors, and lets us emit the
 // disclaimer, a schema version, and sorted aggregates explicitly.
 type jsonReport struct {
-	Schema         string           `json:"schema"`
-	Disclaimer     string           `json:"disclaimer"`
-	Root           string           `json:"root"`
-	Passed         bool             `json:"passed"`
-	Config         jsonConfig       `json:"config"`
-	LicenseCounts  map[string]int   `json:"licenseCounts"`
-	CategoryCounts map[string]int   `json:"categoryCounts"`
-	FileTypeCounts map[string]int   `json:"fileTypeCounts"`
-	Files          []jsonFile       `json:"files"`
-	Dependencies   []jsonDependency `json:"dependencies"`
-	Violations     []string         `json:"violations"`
+	Schema           string           `json:"schema"`
+	Disclaimer       string           `json:"disclaimer"`
+	Root             string           `json:"root"`
+	Passed           bool             `json:"passed"`
+	Config           jsonConfig       `json:"config"`
+	Findings         jsonFindings     `json:"findings"`
+	LicenseCounts    map[string]int   `json:"licenseCounts"`
+	CategoryCounts   map[string]int   `json:"categoryCounts"`
+	FileTypeCounts   map[string]int   `json:"fileTypeCounts"`
+	Groups           []jsonGroup      `json:"groups,omitempty"`
+	Files            []jsonFile       `json:"files"`
+	Dependencies     []jsonDependency `json:"dependencies"`
+	Violations       []string         `json:"violations"`
+	ViolationDetails []jsonViolation  `json:"violationDetails"`
+}
+
+// jsonViolation is one attributable finding in the machine schema.
+type jsonViolation struct {
+	Condition string `json:"condition"`
+	SPDXID    string `json:"spdxId,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Message   string `json:"message"`
+}
+
+// jsonFindings is the machine form of the at-a-glance summary, including the explicit
+// riskLevel/worstCategory so a model can branch on a value instead of parsing strings.
+type jsonFindings struct {
+	SourceTotal    int      `json:"sourceTotal"`
+	SourceHeadered int      `json:"sourceHeadered"`
+	SourceMissing  int      `json:"sourceMissing"`
+	UnknownCount   int      `json:"unknownCount"`
+	Copyleft       []string `json:"copyleft"`
+	RiskLevel      string   `json:"riskLevel"`
+	WorstCategory  string   `json:"worstCategory,omitempty"`
+	DepsScanned    bool     `json:"depsScanned"`
+	DepsTotal      int      `json:"depsTotal"`
+	DepsResolved   int      `json:"depsResolved"`
+	DepsUnresolved int      `json:"depsUnresolved"`
+}
+
+// jsonGroup is one grouped bucket in the machine schema. Files is omitted under
+// --summary (counts only).
+type jsonGroup struct {
+	Key      string         `json:"key"`
+	Count    int            `json:"count"`
+	Risk     string         `json:"risk"`
+	Licenses map[string]int `json:"licenses"`
+	Files    []jsonFile     `json:"files,omitempty"`
 }
 
 type jsonConfig struct {
@@ -646,54 +937,124 @@ type jsonDependency struct {
 	Reason     string `json:"reason,omitempty"`
 }
 
-func renderJSON(w io.Writer, r model.Report) error {
-	out := jsonReport{
-		Schema:         "license-tool/report/v1",
-		Disclaimer:     Disclaimer,
-		Root:           r.Root,
-		Passed:         r.Passed,
-		Config:         jsonConfig{License: r.Config.License, Holder: r.Config.Holder, Style: r.Config.Style.String()},
-		LicenseCounts:  nonNilCounts(r.LicenseCounts),
-		CategoryCounts: nonNilCounts(r.CategoryCounts),
-		FileTypeCounts: nonNilCounts(r.FileTypeCounts),
-		Violations:     nonNilStrings(r.Violations),
-	}
-
-	out.Files = make([]jsonFile, 0, len(r.Files))
-	for _, fr := range sortedFiles(r.Files) {
-		out.Files = append(out.Files, jsonFile{
-			Path:       fr.Path,
-			FileType:   fr.FileType,
-			Skipped:    fr.Skipped,
-			SkipReason: fr.SkipReason,
-			HasHeader:  fr.Detected.Present,
-			SPDXID:     fr.Detected.SPDXID,
-			Holder:     fr.Detected.Holder,
-			Year:       fr.Detected.Year,
-			Action:     fr.Action,
-			Diff:       fr.Diff,
-			Violations: nonNilStrings(fr.Violations),
-			Error:      fr.Err,
-		})
-	}
-
-	out.Dependencies = make([]jsonDependency, 0, len(r.Dependencies))
-	for _, dep := range sortedDeps(r.Dependencies) {
-		out.Dependencies = append(out.Dependencies, jsonDependency{
-			Ecosystem:  dep.Ecosystem,
-			Name:       dep.Name,
-			Version:    dep.Version,
-			SPDXID:     dep.SPDXID,
-			Resolution: dep.Resolution.String(),
-			Reason:     dep.Reason,
-		})
-	}
-
+func renderJSON(w io.Writer, r model.Report, opts RenderOptions) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	// Map keys are marshaled in sorted order by encoding/json, and every slice is
 	// pre-sorted, so the emitted JSON is byte-stable for identical reports.
+
+	incompatIDs := incompatibleIDs(distinctSourceIDs(r.Files))
+	lr := opts.listingReport(r)
+	var groups []jsonGroup
+	if opts.GroupBy != GroupNone {
+		groups = buildJSONGroups(lr, opts, incompatIDs)
+	}
+	details := toJSONViolations(r.ViolationDetails)
+	findings := toJSONFindings(buildFindings(r))
+
+	// JSON always emits the complete report regardless of --summary: machine consumers
+	// (scripts, dashboards, LLMs) want the full data in one call and slice it
+	// themselves. --summary only trims the human (text/markdown) renderers.
+	out := jsonReport{
+		Schema:           "license-tool/report/v1",
+		Disclaimer:       Disclaimer,
+		Root:             r.Root,
+		Passed:           r.Passed,
+		Config:           jsonConfig{License: r.Config.License, Holder: r.Config.Holder, Style: r.Config.Style.String()},
+		Findings:         findings,
+		LicenseCounts:    nonNilCounts(r.LicenseCounts),
+		CategoryCounts:   nonNilCounts(r.CategoryCounts),
+		FileTypeCounts:   nonNilCounts(r.FileTypeCounts),
+		Groups:           groups,
+		Violations:       nonNilStrings(r.Violations),
+		ViolationDetails: details,
+	}
+
+	out.Files = make([]jsonFile, 0, len(lr.Files))
+	for _, fr := range sortedFiles(lr.Files) {
+		out.Files = append(out.Files, toJSONFile(fr))
+	}
+
+	out.Dependencies = make([]jsonDependency, 0, len(r.Dependencies))
+	for _, dep := range sortedDeps(r.Dependencies) {
+		out.Dependencies = append(out.Dependencies, toJSONDependency(dep))
+	}
+
 	return enc.Encode(out)
+}
+
+// buildJSONGroups builds the machine grouping for opts.GroupBy. File detail is
+// included unless --summary asks for counts only.
+func buildJSONGroups(r model.Report, opts RenderOptions, incompatIDs map[string]bool) []jsonGroup {
+	groups, _ := groupFilesWith(r, opts.spec(), incompatIDs)
+	sortGroups(groups, opts.SortByCount)
+	out := make([]jsonGroup, 0, len(groups))
+	for _, g := range groups {
+		jg := jsonGroup{Key: g.Key, Count: g.Count, Risk: g.Risk, Licenses: g.Licenses}
+		jg.Files = make([]jsonFile, 0, len(g.Files))
+		for _, fr := range g.Files {
+			jg.Files = append(jg.Files, toJSONFile(fr))
+		}
+		out = append(out, jg)
+	}
+	return out
+}
+
+func toJSONFile(fr model.FileResult) jsonFile {
+	return jsonFile{
+		Path:       fr.Path,
+		FileType:   fr.FileType,
+		Skipped:    fr.Skipped,
+		SkipReason: fr.SkipReason,
+		HasHeader:  fr.Detected.Present,
+		SPDXID:     fr.Detected.SPDXID,
+		Holder:     fr.Detected.Holder,
+		Year:       fr.Detected.Year,
+		Action:     fr.Action,
+		Diff:       fr.Diff,
+		Violations: nonNilStrings(fr.Violations),
+		Error:      fr.Err,
+	}
+}
+
+func toJSONFindings(f Findings) jsonFindings {
+	return jsonFindings{
+		SourceTotal:    f.SourceTotal,
+		SourceHeadered: f.SourceHeadered,
+		SourceMissing:  f.SourceMissing,
+		UnknownCount:   f.UnknownCount,
+		Copyleft:       nonNilStrings(f.Copyleft),
+		RiskLevel:      f.RiskLevel,
+		WorstCategory:  f.WorstCategory,
+		DepsScanned:    f.DepsScanned,
+		DepsTotal:      f.DepsTotal,
+		DepsResolved:   f.DepsResolved,
+		DepsUnresolved: f.DepsUnresolved,
+	}
+}
+
+func toJSONViolations(details []model.ViolationDetail) []jsonViolation {
+	out := make([]jsonViolation, 0, len(details))
+	for _, v := range details {
+		out = append(out, jsonViolation{
+			Condition: v.Condition.String(),
+			SPDXID:    v.SPDXID,
+			Path:      v.Path,
+			Message:   v.Message,
+		})
+	}
+	return out
+}
+
+func toJSONDependency(dep model.DependencyLicense) jsonDependency {
+	return jsonDependency{
+		Ecosystem:  dep.Ecosystem,
+		Name:       dep.Name,
+		Version:    dep.Version,
+		SPDXID:     dep.SPDXID,
+		Resolution: dep.Resolution.String(),
+		Reason:     dep.Reason,
+	}
 }
 
 // ----- ordering + formatting helpers -----
@@ -711,6 +1072,16 @@ func sortedCounts(m map[string]int) []countKV {
 		out = append(out, countKV{key: k, count: v})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].key < out[j].key })
+	return out
+}
+
+// sortedCountsBy returns the entries key-sorted (default) or by descending count with
+// key ties broken alphabetically when byCount is set.
+func sortedCountsBy(m map[string]int, byCount bool) []countKV {
+	out := sortedCounts(m)
+	if byCount {
+		sort.SliceStable(out, func(i, j int) bool { return out[i].count > out[j].count })
+	}
 	return out
 }
 

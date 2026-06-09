@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `audit --summary`: a counts-only report (findings plus the by-SPDX, by-category, and by-file-type rollups) that omits the per-file and per-dependency lists and any pending diffs.
+- `audit --group-by license|category|type|directory`: organizes the source-file listing under each value of the dimension; combined with `--summary` it shows per-group counts only.
+- `audit --sort key|count`, `--depth N` (widen directory keys to N path segments), and `--only missing,unknown,copyleft,violations` (narrow the file listing to problem files without distorting the rollups).
+- Per-group **risk** markers and per-group license breakdowns, so a `directory` or `type` grouping is not license-blind.
+- Policy-aware group risk: a group's risk escalates to `high` when its license is party to a repo-level hard incompatibility (e.g. an Apache group beside an AGPL group) or a file in it carries a policy violation, instead of reporting the license category's risk alone.
+- Attributable policy violations in every format: each violation names the offending license, the rule, and the file (text/markdown) or a structured `violationDetails` array (JSON).
+- `findings` summary, per-row percentages/totals, and `riskLevel`/`worstCategory` in the JSON and markdown reports (previously text-only).
+
+### Changed
+- The JSON report always emits the complete report; `--summary` only trims the human-readable (text/markdown) formats.
+- Renamed the headerless source-file bucket label to `(no-header)`.
+
+### Fixed
+- Excluded the tool's own `.license-tool.yaml` from source-header coverage (it is listed as skipped with reason `tool config`), so it no longer inflates the source-file and missing-header counts and `check` no longer fails on it for lacking a header.
+- Made per-group risk reflect the full repo's incompatibilities under `--only`: the risk marker is now derived from the whole report, so narrowing the listing no longer understates a group's risk.
+
 ## [0.3.0] - 2026-06-04
 
 ### Install

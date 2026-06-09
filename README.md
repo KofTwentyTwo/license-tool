@@ -54,7 +54,42 @@ license-tool audit --format json --output audit.json
 license-tool audit --format markdown --output LICENSE-AUDIT.md
 license-tool audit --deps=false
 license-tool audit --resolve-deps tool
+license-tool audit --summary                 # counts only; no per-file/dependency lists
+license-tool audit --group-by license        # group source files by license
+license-tool audit --group-by directory      # group by top-level directory
+license-tool audit --summary --group-by type # per-group counts only
+license-tool audit --group-by directory --depth 2  # group by two path segments
+license-tool audit --group-by license --sort count # most common first
+license-tool audit --only missing,copyleft         # list only problem files
 ```
+
+By default the report lists every source file. `--summary` keeps the `findings:`
+overview and the by-SPDX / by-category / by-file-type rollups but omits the per-file
+and per-dependency lists and any pending diffs. `--group-by license|category|type|directory`
+organizes the source-file listing under each value of the dimension instead of a flat
+list; combined with `--summary` it shows per-group counts only. Each group reports its
+worst license **risk** (`high`/`medium`/`low`, or `unknown` for a headerless group)
+and, for non-license groupings, its license breakdown, so a `directory` view is not
+license-blind. Group risk is **policy-aware**: it escalates to `high` when the group's
+license is party to a repo-level hard incompatibility (e.g. an Apache group beside an
+AGPL group) or a file in it carries a policy violation, so a group is never reported
+"low" while it is actually an audit liability. `--sort key|count`
+orders rollups and groups; `--depth N` widens directory keys to N path segments;
+`--only missing,unknown,copyleft,violations` narrows the file listing to problem files
+without distorting the rollups. The flags apply to text, markdown, and JSON (which
+always emits the complete report — `--summary` only trims the human formats). An
+unknown `--group-by`/`--sort`/`--only` value is a usage error.
+
+Every format now carries the `findings` summary (coverage, license mix, risk level,
+copyleft, dependency resolution, policy) and **attributable policy violations** — each
+violation names the offending license, the rule, and the file (text/markdown) or a
+structured `violationDetails` array (JSON), so both engineers and tools can see *why*
+a check failed, not just that it did. Rollups show per-row percentages and totals.
+
+The tool's own `.license-tool.yaml` is treated as metadata, not coverable source: it
+is listed as skipped (reason `tool config`) and never counted toward source-header
+coverage, so it cannot inflate the missing-header tally — and `check` no longer fails
+on the config for lacking a header.
 
 Audit output is read-only. Audit always prints a "not legal advice" disclaimer.
 Text output starts with a `findings:` summary that calls out source-file header
@@ -70,6 +105,41 @@ findings:
   dependencies: 8 (resolved 6, unresolved 2)
   policy: FAIL (1: policy-violation)
 ```
+
+`--group-by` turns the flat file list into a grouped view. For example,
+`audit --group-by license` shows exactly which files carry which license, and where
+the gaps are:
+
+```text
+source files by license:
+  (no-header) (1) [risk: unknown]
+    src/legacy.go  [no managed header]
+  AGPL-3.0-or-later (2) [risk: high]
+    src/a.go  [AGPL-3.0-or-later]
+    src/b.go  [AGPL-3.0-or-later]
+  MIT (2) [risk: low]
+    web/c.ts  [MIT]
+    web/d.ts  [MIT]
+  (skipped: 6)
+```
+
+For a tree-shaped view of coverage, `audit --summary --group-by directory` answers
+"which parts of the repo are licensed" at a glance, with no per-file noise. Each
+directory carries its worst risk and its license breakdown, so the grouping is not
+license-blind:
+
+```text
+source files by directory:
+  src (3) [risk: high]
+    licenses: (no-header) 1, AGPL-3.0-or-later 2
+  web (2) [risk: low]
+    licenses: MIT 2
+  (skipped: 6)
+```
+
+And `audit --group-by license --format json` emits the same grouping as machine data
+(a `groups` array of `{key, count, risk, licenses, files}`) for dashboards and CI
+summaries.
 
 Dependency audit discovers manifests in the root and in subdirectories, while
 honoring git, `.gitignore`, configured excludes, and common vendor-heavy
