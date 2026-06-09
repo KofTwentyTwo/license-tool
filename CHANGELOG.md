@@ -7,22 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-09
+
+### Install
+```bash
+brew install --cask KofTwentyTwo/tap/license-tool
+```
+
 ### Added
-- `audit --summary`: a counts-only report (findings plus the by-SPDX, by-category, and by-file-type rollups) that omits the per-file and per-dependency lists and any pending diffs.
-- `audit --group-by license|category|type|directory`: organizes the source-file listing under each value of the dimension; combined with `--summary` it shows per-group counts only.
-- `audit --sort key|count`, `--depth N` (widen directory keys to N path segments), and `--only missing,unknown,copyleft,violations` (narrow the file listing to problem files without distorting the rollups).
-- Per-group **risk** markers and per-group license breakdowns, so a `directory` or `type` grouping is not license-blind.
-- Policy-aware group risk: a group's risk escalates to `high` when its license is party to a repo-level hard incompatibility (e.g. an Apache group beside an AGPL group) or a file in it carries a policy violation, instead of reporting the license category's risk alone.
-- Attributable policy violations in every format: each violation names the offending license, the rule, and the file (text/markdown) or a structured `violationDetails` array (JSON).
-- `findings` summary, per-row percentages/totals, and `riskLevel`/`worstCategory` in the JSON and markdown reports (previously text-only).
+- `init` now opens a full-screen Bubble Tea wizard with project-model, license, identity, header-style, license-file, coverage, and review steps (#29).
+- Live example source previews for 15 language families, plus a `.license-tool.yaml` preview and a C fallback when no supported source language is detected (#29).
+- Persisted `include` config support, wired through audit, apply, license, and init (#29).
+- `audit --summary`: a counts-only report (findings plus the by-SPDX, by-category, and by-file-type rollups) that omits the per-file and per-dependency lists and any pending diffs (#35).
+- `audit --group-by license|category|type|directory`: organizes the source-file listing under each value of the dimension; combined with `--summary` it shows per-group counts only (#35).
+- `audit --sort key|count`, `--depth N` (widen directory keys to N path segments), and `--only missing,unknown,copyleft,violations` (narrow the file listing to problem files without distorting the rollups) (#35).
+- Per-group **risk** markers and per-group license breakdowns, so a `directory` or `type` grouping is not license-blind (#35).
+- Policy-aware group risk: a group's risk escalates to `high` when its license is party to a repo-level hard incompatibility (e.g. an Apache group beside an AGPL group) or a file in it carries a policy violation, instead of reporting the license category's risk alone (#35).
+- Attributable policy violations in every format: each violation names the offending license, the rule, and the file (text/markdown) or a structured `violationDetails` array (JSON) (#35).
+- `findings` summary, per-row percentages/totals, and `riskLevel`/`worstCategory` in the JSON and markdown reports (previously text-only) (#35).
 
 ### Changed
-- The JSON report always emits the complete report; `--summary` only trims the human-readable (text/markdown) formats.
-- Renamed the headerless source-file bucket label to `(no-header)`.
+- The JSON report always emits the complete report; `--summary` only trims the human-readable (text/markdown) formats (#35).
+- Renamed the headerless source-file bucket label to `(no-header)` (#35).
+- Dependency resolution no longer guesses: ambiguous license aliases (a bare `bsd`, a bare LGPL name, EPL spellings) now resolve to *unresolved* with a reason instead of a fabricated SPDX id, and alias targets are held to the curated set so a "resolved" dependency is always classifiable (#31).
+
+### Removed
+- Removed the no-op `--quiet`/`-q` and `--verbose`/`-v` flags, which were bound but never read; they implied behavior the tool did not deliver (#34).
 
 ### Fixed
-- Excluded the tool's own `.license-tool.yaml` from source-header coverage (it is listed as skipped with reason `tool config`), so it no longer inflates the source-file and missing-header counts and `check` no longer fails on it for lacking a header.
-- Made per-group risk reflect the full repo's incompatibilities under `--only`: the risk marker is now derived from the whole report, so narrowing the listing no longer understates a group's risk.
+- Confined license-header detection to contiguous comment lines and required the `SPDX-License-Identifier:` tag to begin a comment line, so `apply` no longer risks deleting an adjacent doc comment separated from the header by a blank line (#30).
+- Refuse to overwrite a symlinked `LICENSE` / `LICENSES/*.txt` instead of silently converting the symlink into a regular file via the atomic write (#33).
+- Excluded the tool's own `.license-tool.yaml` from source-header coverage (it is listed as skipped with reason `tool config`), so it no longer inflates the source-file and missing-header counts and `check` no longer fails on it for lacking a header (#35).
+- Made per-group risk reflect the full repo's incompatibilities under `--only`: the risk marker is now derived from the whole report, so narrowing the listing no longer understates a group's risk (#35).
 
 ## [0.3.0] - 2026-06-04
 

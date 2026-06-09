@@ -1,5 +1,9 @@
 # Releasing
 
+> For the complete end-to-end runbook (integrating multiple feature PRs, versioning,
+> conflict resolution, tagging, and post-release verification) see [RELEASES.md](./RELEASES.md).
+> This file is the short reference.
+
 Releases are built with [GoReleaser](https://goreleaser.com) and published by GitHub Actions.
 
 ## Changelog Management
