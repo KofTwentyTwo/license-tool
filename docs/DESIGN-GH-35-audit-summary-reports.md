@@ -77,3 +77,14 @@ Groups are sorted by key; files within a group are sorted by path. Deterministic
 ## Out of scope
 
 - Grouping dependencies; multiple simultaneous `--group-by` dimensions; a configurable directory depth (top-level only for now).
+
+## Post-implementation addenda (2026-06-08)
+
+The implementation extended past the original scope in two deliberate places, and three audit-flagged items were resolved by decision rather than code:
+
+- **Implemented beyond original scope.** A configurable directory depth (`--depth N`), per-group risk markers and license breakdowns, `--sort key|count`, `--only` filtering, attributable `violationDetails`, and JSON/markdown findings parity were all added. The "top-level only" directory-depth non-goal above was superseded.
+- **Self-config exclusion.** The tool's own `.license-tool.yaml` is YAML (commentable) and was being counted as a headerless source file, inflating `sourceTotal`/`sourceMissing`. It is now marked skipped (reason `tool config`) in the audit pipeline (`buildAuditPipeline`), keyed off the exported `config.RepoConfigName`. It stays in the file listing for transparency but is excluded from coverage tallies.
+- **Policy-aware group risk.** A group's `[risk]` was computed only from its files' license categories, so it was policy-blind (an Apache group beside AGPL read `low`). Group risk now escalates to `high` when a group's license is party to a repo-level hard incompatibility (computed via `policy.Incompatible` over the distinct source ids) or a file in the group carries a file-scoped `policy-violation` token. Heterogeneity is intentionally not escalated (a whole-repo property; escalating every group would be noise).
+- **`--group-by dependency` — confirmed non-goal.** Re-flagged by the clean-room audit but reaffirmed as out of scope: dependencies are not files, the semantics are ambiguous (by-license vs by-ecosystem), and the dependency section already has its own resolved/unresolved view.
+- **JSON explicit percentages/totals — declined.** Per-row percentages are a presentation concern of the human formats; the JSON report stays normalized (counts + `findings`), from which any consumer can derive them. Adding redundant fields was judged low value.
+- **`go.mod` dependency resolution — not a defect.** The audit flagged "dep resolver returned 0 for a go.mod require." Go modules are not a supported dependency ecosystem (only npm, Maven, and Gradle manifests are discovered), so resolving zero dependencies for a Go-module repo is correct behavior, not a bug.

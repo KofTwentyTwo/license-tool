@@ -68,8 +68,12 @@ overview and the by-SPDX / by-category / by-file-type rollups but omits the per-
 and per-dependency lists and any pending diffs. `--group-by license|category|type|directory`
 organizes the source-file listing under each value of the dimension instead of a flat
 list; combined with `--summary` it shows per-group counts only. Each group reports its
-worst license **risk** (`high`/`medium`/`low`) and, for non-license groupings, its
-license breakdown, so a `directory` view is not license-blind. `--sort key|count`
+worst license **risk** (`high`/`medium`/`low`, or `unknown` for a headerless group)
+and, for non-license groupings, its license breakdown, so a `directory` view is not
+license-blind. Group risk is **policy-aware**: it escalates to `high` when the group's
+license is party to a repo-level hard incompatibility (e.g. an Apache group beside an
+AGPL group) or a file in it carries a policy violation, so a group is never reported
+"low" while it is actually an audit liability. `--sort key|count`
 orders rollups and groups; `--depth N` widens directory keys to N path segments;
 `--only missing,unknown,copyleft,violations` narrows the file listing to problem files
 without distorting the rollups. The flags apply to text, markdown, and JSON (which
@@ -81,6 +85,10 @@ copyleft, dependency resolution, policy) and **attributable policy violations** 
 violation names the offending license, the rule, and the file (text/markdown) or a
 structured `violationDetails` array (JSON), so both engineers and tools can see *why*
 a check failed, not just that it did. Rollups show per-row percentages and totals.
+
+The tool's own `.license-tool.yaml` is treated as metadata, not coverable source: it
+is listed as skipped (reason `tool config`) and never counted toward source-header
+coverage, so it cannot inflate the missing-header tally.
 
 Audit output is read-only. Audit always prints a "not legal advice" disclaimer.
 Text output starts with a `findings:` summary that calls out source-file header
