@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/KofTwentyTwo/license-tool/internal/model"
+	"github.com/KofTwentyTwo/license-tool/internal/policy"
 )
 
 // GroupDimension selects how the source-file listing is organized for the
@@ -161,6 +162,12 @@ type Group struct {
 // (binary/uncommentable/unknown) which are never grouped. GroupNone returns no
 // groups. Pure and deterministic for identical input.
 func GroupFiles(r model.Report, spec GroupSpec) (groups []Group, skipped int) {
+	// Repo-level hard incompatibilities are not attributed to any single file, so a
+	// group's risk would otherwise be blind to them (an Apache group beside AGPL would
+	// read "low"). Compute the set of repo licenses party to a curated incompatibility
+	// once, and use it to make per-group risk policy-aware.
+	incompatIDs := incompatibleIDs(distinctSourceIDs(r.Files))
+
 	buckets := map[string][]model.FileResult{}
 	for _, fr := range r.Files {
 		if fr.Skipped {
@@ -186,7 +193,7 @@ func GroupFiles(r model.Report, spec GroupSpec) (groups []Group, skipped int) {
 		groups = append(groups, Group{
 			Key:      k,
 			Count:    len(files),
-			Risk:     groupRisk(files),
+			Risk:     groupRisk(files, incompatIDs),
 			Licenses: licenseBreakdown(files),
 			Files:    files,
 		})
@@ -211,13 +218,29 @@ func licenseBreakdown(files []model.FileResult) map[string]int {
 	return out
 }
 
-// groupRisk returns the worst category risk among a group's files.
-func groupRisk(files []model.FileResult) string {
+// groupRisk returns the group's risk: the worst category risk among its files,
+// escalated to "high" when the group carries a policy concern. A policy concern is
+// a file whose license is party to a repo-level hard incompatibility (incompatIDs)
+// or a file carrying a file-scoped policy violation (deny/allow/required breach).
+// WHY escalate: a license-category-only risk is policy-blind -- an Apache group
+// beside AGPL, or a deny-listed permissive license, both read "low" by category yet
+// are real audit liabilities.
+func groupRisk(files []model.FileResult, incompatIDs map[string]bool) string {
 	var w worstRisk
+	policyConcern := false
 	for _, fr := range files {
 		if fr.Detected.Present && fr.Detected.SPDXID != "" {
 			w.observe(classifyCategory(fr.Detected.SPDXID))
+			if incompatIDs[fr.Detected.SPDXID] {
+				policyConcern = true
+			}
 		}
+		if hasPolicyViolation(fr) {
+			policyConcern = true
+		}
+	}
+	if policyConcern {
+		return "high"
 	}
 	level, _ := w.result()
 	if level == "none" {
@@ -226,6 +249,35 @@ func groupRisk(files []model.FileResult) string {
 		return "unknown"
 	}
 	return level
+}
+
+// incompatibleIDs returns the set of SPDX ids that are party to a curated hard
+// incompatibility with another id in the same repo. ids is the distinct source-id
+// set; the pairwise scan is over the (small) distinct set, not every file.
+func incompatibleIDs(ids []string) map[string]bool {
+	out := map[string]bool{}
+	for i := 0; i < len(ids); i++ {
+		for j := i + 1; j < len(ids); j++ {
+			if policy.Incompatible(ids[i], ids[j]) {
+				out[ids[i]] = true
+				out[ids[j]] = true
+			}
+		}
+	}
+	return out
+}
+
+// hasPolicyViolation reports whether a file carries a file-scoped policy-violation
+// token (allow/deny/required breach). Missing-header and unknown-license tokens are
+// excluded: those are already reflected by the category-based risk (headerless ->
+// unknown, unclassifiable id -> unknown) and are not policy escalations.
+func hasPolicyViolation(fr model.FileResult) bool {
+	for _, tok := range fr.Violations {
+		if tok == model.FailOnPolicyViolation.String() {
+			return true
+		}
+	}
+	return false
 }
 
 // sortGroups orders groups by descending count (ties by key) when byCount is set,

@@ -116,6 +116,52 @@ func TestTopDirs(t *testing.T) {
 	assert.Equal(t, "src", topDirs("src/a.go", 0))              // depth < 1 -> 1
 }
 
+// groupByKey returns the group with the given key, failing the test if absent.
+func groupByKey(t *testing.T, groups []Group, key string) Group {
+	t.Helper()
+	for _, g := range groups {
+		if g.Key == key {
+			return g
+		}
+	}
+	t.Fatalf("no group with key %q in %v", key, groups)
+	return Group{}
+}
+
+func TestGroupRiskCategoryOnlyWhenNoPolicyConcern(t *testing.T) {
+	// sampleReport mixes MIT (permissive) and AGPL (network-copyleft). MIT and AGPL
+	// are NOT a curated hard incompatibility, so the MIT group must stay "low" (no
+	// false escalation), AGPL stays "high" by its category, and the headerless group
+	// is "unknown".
+	groups, _ := GroupFiles(sampleReport(), GroupSpec{By: GroupLicense})
+	assert.Equal(t, "low", groupByKey(t, groups, "MIT").Risk)
+	assert.Equal(t, "high", groupByKey(t, groups, "AGPL-3.0-or-later").Risk)
+	assert.Equal(t, "unknown", groupByKey(t, groups, noLicenseKey).Risk)
+}
+
+func TestGroupRiskEscalatesOnRepoIncompatibility(t *testing.T) {
+	// Apache-2.0 is permissive (category risk "low"), but beside AGPL-3.0-or-later it
+	// is party to a curated hard incompatibility. The Apache group must read "high",
+	// not "low" -- a group is not "all clear" when its license clashes repo-wide.
+	r := model.Report{Files: []model.FileResult{
+		headered("a/x.go", "Go", "Apache-2.0"),
+		headered("b/y.go", "Go", "AGPL-3.0-or-later"),
+	}}
+	groups, _ := GroupFiles(r, GroupSpec{By: GroupLicense})
+	assert.Equal(t, "high", groupByKey(t, groups, "Apache-2.0").Risk)
+	assert.Equal(t, "high", groupByKey(t, groups, "AGPL-3.0-or-later").Risk)
+}
+
+func TestGroupRiskEscalatesOnFileScopedPolicyViolation(t *testing.T) {
+	// A permissive license carrying a file-scoped policy violation (e.g. deny-listed)
+	// must escalate its group to "high" rather than reading its category risk "low".
+	denied := headered("a/x.go", "Go", "MIT")
+	denied.Violations = []string{model.FailOnPolicyViolation.String()}
+	r := model.Report{Files: []model.FileResult{denied}}
+	groups, _ := GroupFiles(r, GroupSpec{By: GroupLicense})
+	assert.Equal(t, "high", groupByKey(t, groups, "MIT").Risk)
+}
+
 func TestLicenseBreakdown(t *testing.T) {
 	files := []model.FileResult{
 		headered("a.go", "Go", "MIT"),
