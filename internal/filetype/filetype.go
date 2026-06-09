@@ -75,6 +75,12 @@ var builtin = []model.FileType{
 		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM)},
 	},
 	{
+		Name:          "C#",
+		Extensions:    []string{".cs"},
+		CommentStyle:  block("/*", "*/"),
+		PreserveFirst: []model.PreserveRule{after(model.PreserveBOM)},
+	},
+	{
 		Name:          "C/C++",
 		Extensions:    []string{".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".m", ".mm"},
 		CommentStyle:  block("/*", "*/"),

@@ -1,114 +1,195 @@
 package main
 
 import (
-	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"time"
 
-	"github.com/charmbracelet/huh"
+	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/KofTwentyTwo/license-tool/internal/config"
-	"github.com/KofTwentyTwo/license-tool/internal/spdx"
+	"github.com/KofTwentyTwo/license-tool/internal/initwizard"
 )
 
-// errEmptyHolder is the in-form validation error shown when the holder is blank. A
-// non-empty holder is required to render a meaningful copyright line, so the wizard
-// refuses to advance until one is entered.
-var errEmptyHolder = errors.New("copyright holder is required")
-
-// initAnswers holds the raw string answers collected by the interactive init
-// wizard, before they are validated and parsed into a model.Config. WHY raw strings
-// (not a model.Config): the form binds directly to these fields, and answersToConfig
-// owns the single validation/parse pass, so the wizard stays a thin I/O shell with
-// no business logic (this file is excluded from coverage for exactly that reason).
-type initAnswers struct {
-	License           string
-	Holder            string
-	Year              string
-	Style             string
-	ManageLicenseFile bool
-	Excludes          []string
+// initWizardModel is a thin Bubble Tea adapter. WHY it carries no logic: every
+// decision (field state, validation, layout, rendering, the single Answers->Config
+// translation) lives in the pure, fully-tested internal/initwizard package; this
+// shell only forwards window sizes and keystrokes to FormState transitions and
+// renders via initwizard.Render. It is excluded from the coverage gate precisely
+// because it is this trivial.
+type initWizardModel struct {
+	form      initwizard.FormState
+	sample    initwizard.Sample
+	nowYear   int
+	width     int
+	height    int
+	confirmed bool
 }
 
-// licenseSelectOptions builds the filterable license picker options: the curated
-// CommonIDs first (each labeled "<id> (common)" so a user knows they are the
-// recommended set), then the remaining renderable SPDX ids in sorted order with no
-// duplicates. WHY common-first: the operator sees sensible defaults at the top
-// before the alphabetical tail they can still filter into.
-func licenseSelectOptions() []huh.Option[string] {
-	common := spdx.CommonIDs()
-	seen := make(map[string]bool, len(common))
-	opts := make([]huh.Option[string], 0, len(common))
-	for _, id := range common {
-		seen[id] = true
-		opts = append(opts, huh.NewOption(id+" (common)", id))
+func newInitWizardModel(root string, a initwizard.Answers) initWizardModel {
+	seeded, detected := initwizard.Seed(root, a, initwizard.SeedDeps{})
+	return initWizardModel{
+		form:    initwizard.NewForm(seeded, detected),
+		sample:  initwizard.SelectSample(previewCandidatePaths(root)),
+		nowYear: time.Now().Year(),
 	}
-	for _, id := range spdx.RenderableIDs() {
-		if seen[id] {
-			continue
+}
+
+func (m initWizardModel) Init() tea.Cmd { return nil }
+
+func (m initWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		return m, nil
+	case tea.KeyMsg:
+		return m.handleKey(msg)
+	}
+	return m, nil
+}
+
+func (m initWizardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyCtrlS:
+		if m.form.CanWrite() {
+			m.confirmed = true
+			return m, tea.Quit
 		}
-		opts = append(opts, huh.NewOption(id, id))
+		return m, nil
 	}
-	return opts
+
+	if m.form.Editing() {
+		return m.handleEditingKey(msg)
+	}
+	return m.handleNavKey(msg)
 }
 
-// runInitWizard drives the interactive init form, binding each answer into a. WHY
-// the Year/License validators reuse the config parsers: the wizard must reject the
-// same inputs answersToConfig would later reject, so the user fixes a bad value
-// in-place rather than getting a post-submit error.
-func runInitWizard(a *initAnswers) error {
-	// Pre-populate the year field with the safe "git" default so an operator who just
-	// presses enter accepts the same default the config layer would have applied.
-	if a.Year == "" {
-		a.Year = "git"
+func (m initWizardModel) handleEditingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.form.Cancel()
+	case tea.KeyEnter:
+		m.form.Commit()
+	case tea.KeyUp:
+		m.form.MoveCursor(-1)
+	case tea.KeyDown:
+		m.form.MoveCursor(1)
+	case tea.KeyDelete:
+		m.form.Remove()
+	case tea.KeyBackspace:
+		m.form.Backspace()
+	case tea.KeyRunes, tea.KeySpace:
+		for _, r := range msg.Runes {
+			m.form.Input(r)
+		}
 	}
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Target SPDX license").
-				Options(licenseSelectOptions()...).
-				Filtering(true).
-				Value(&a.License),
-			huh.NewInput().
-				Title("Copyright holder").
-				Value(&a.Holder).
-				Validate(func(s string) error {
-					if s == "" {
-						return errEmptyHolder
-					}
-					return nil
-				}),
-			huh.NewInput().
-				Title("Year policy (current|YYYY|YYYY-YYYY|git)").
-				Value(&a.Year).
-				Validate(func(s string) error {
-					if s == "" {
-						return nil
-					}
-					_, err := config.ParseYearSpec(s)
-					return err
-				}),
-			huh.NewSelect[string]().
-				Title("Header style").
-				Options(
-					huh.NewOption("reuse", "reuse"),
-					huh.NewOption("notice", "notice"),
-					huh.NewOption("reuse+notice", "reuse+notice"),
-				).
-				Value(&a.Style),
-			huh.NewConfirm().
-				Title("Manage top-level LICENSE file?").
-				Value(&a.ManageLicenseFile),
-		),
-	)
-	return form.Run()
+	return m, nil
 }
 
-// collectInteractive runs the wizard to populate a when interactive is true,
-// otherwise it is a no-op (the non-TTY path relies entirely on flags). WHY a seam:
-// commands.go swaps this out in tests so the init command's non-interactive flow can
-// be exercised without a terminal.
-func collectInteractive(a *initAnswers, interactive bool) error {
-	if !interactive {
+func (m initWizardModel) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		if m.form.Cancel() == initwizard.ActionQuit {
+			return m, tea.Quit
+		}
+	case tea.KeyEnter, tea.KeySpace:
+		if m.form.Activate() == initwizard.ActionWrite {
+			m.confirmed = true
+			return m, tea.Quit
+		}
+	case tea.KeyUp:
+		m.form.MoveFocus(-1)
+	case tea.KeyDown, tea.KeyTab:
+		m.form.MoveFocus(1)
+	case tea.KeyShiftTab:
+		m.form.MoveFocus(-1)
+	}
+	return m, nil
+}
+
+func (m initWizardModel) View() string {
+	width, height := m.width, m.height
+	if width <= 0 {
+		width = 120
+	}
+	if height <= 0 {
+		height = 34
+	}
+	// Reserve two rows for the footer that Render appends below the panels.
+	plan := initwizard.Layout(width, height-2)
+	return initwizard.Render(m.form, plan, m.sample, m.nowYear)
+}
+
+// previewCandidatePaths walks root for files whose extension maps to a preview
+// sample, so SelectSample can pick a language family present in the repo.
+func previewCandidatePaths(root string) []string {
+	if root == "" {
 		return nil
 	}
-	return runInitWizard(a)
+	var paths []string
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if path != root && ignoredPreviewDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		rel = filepath.ToSlash(rel)
+		if _, ok := initwizard.SampleForPath(rel); ok {
+			paths = append(paths, rel)
+		}
+		return nil
+	})
+	sort.Strings(paths)
+	return paths
+}
+
+func ignoredPreviewDir(name string) bool {
+	switch name {
+	case ".git", ".hg", ".svn", ".cache", ".next", "build", "dist", "node_modules", "target", "vendor":
+		return true
+	default:
+		return false
+	}
+}
+
+func runInitWizard(path string, a initwizard.Answers) (initwizard.Answers, error) {
+	program := tea.NewProgram(
+		newInitWizardModel(path, a),
+		tea.WithInput(os.Stdin),
+		tea.WithOutput(os.Stderr),
+		tea.WithAltScreen(),
+	)
+	final, err := program.Run()
+	if err != nil {
+		return a, err
+	}
+	m, ok := final.(initWizardModel)
+	if !ok {
+		return a, fmt.Errorf("init wizard returned unexpected model")
+	}
+	if !m.confirmed {
+		return a, initwizard.ErrAborted
+	}
+	return m.form.Answers(), nil
+}
+
+// collectInteractive runs the wizard when interactive is true, otherwise returning
+// the flag-derived answers unchanged for deterministic non-TTY behavior.
+func collectInteractive(path string, a initwizard.Answers, interactive bool) (initwizard.Answers, error) {
+	if !interactive {
+		return a, nil
+	}
+	return runInitWizard(path, a)
 }

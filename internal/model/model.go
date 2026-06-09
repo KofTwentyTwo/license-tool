@@ -249,6 +249,8 @@ type Config struct {
 	Style HeaderStyle
 	// ManageLicenseFile enables writing top-level LICENSE + LICENSES/<id>.txt.
 	ManageLicenseFile bool
+	// Includes are glob patterns that restrict source-file processing when non-empty.
+	Includes []string
 	// Excludes are gitignore-style patterns added on top of .gitignore.
 	Excludes []string
 	// Policy drives audit classification and check exit codes.

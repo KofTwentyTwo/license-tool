@@ -169,6 +169,8 @@ holder: "Kingsrook, LLC"
 year: git
 style: reuse+notice
 manage_license_file: true
+include:
+  - "src/**"
 exclude:
   - "**/generated/**"
 policy:
@@ -188,6 +190,9 @@ file_types:
 		}
 		if fs.ManageLicenseFile == nil || !*fs.ManageLicenseFile {
 			t.Errorf("manage_license_file not decoded as true: %+v", fs.ManageLicenseFile)
+		}
+		if len(fs.Include) != 1 || fs.Include[0] != "src/**" {
+			t.Errorf("include not decoded: %+v", fs.Include)
 		}
 		if len(fs.Policy.Allow) != 2 || len(fs.FileTypes) != 1 {
 			t.Errorf("nested keys not decoded: %+v", fs)
@@ -522,6 +527,38 @@ style: notice
 			if !want[e] {
 				t.Errorf("unexpected exclude %q", e)
 			}
+		}
+	})
+
+	t.Run("highest non-empty include layer wins", func(t *testing.T) {
+		xdg := isolateXDG(t)
+		writeFile(t, filepath.Join(xdg, "license-tool", "config.yaml"), "license: MIT\nholder: A\ninclude: [\"global/**\"]\n")
+		repo := t.TempDir()
+		writeFile(t, filepath.Join(repo, RepoConfigName), "include: [\"repo/**\"]\n")
+
+		cfg, err := Resolve(repo, Flags{}, Options{Interactive: false})
+		if err != nil {
+			t.Fatalf("Resolve error: %v", err)
+		}
+		if len(cfg.Includes) != 1 || cfg.Includes[0] != "repo/**" {
+			t.Fatalf("includes = %v, want repo layer only", cfg.Includes)
+		}
+
+		cfg, err = Resolve(repo, Flags{Include: []string{"flags/**"}}, Options{Interactive: false})
+		if err != nil {
+			t.Fatalf("Resolve error: %v", err)
+		}
+		if len(cfg.Includes) != 1 || cfg.Includes[0] != "flags/**" {
+			t.Fatalf("includes = %v, want flags layer only", cfg.Includes)
+		}
+
+		repoWithoutInclude := t.TempDir()
+		cfg, err = Resolve(repoWithoutInclude, Flags{}, Options{Interactive: false})
+		if err != nil {
+			t.Fatalf("Resolve error: %v", err)
+		}
+		if len(cfg.Includes) != 1 || cfg.Includes[0] != "global/**" {
+			t.Fatalf("includes = %v, want user layer only", cfg.Includes)
 		}
 	})
 }
@@ -1100,6 +1137,7 @@ func TestRenderFile(t *testing.T) {
 		cfg.Year = model.YearSpec{Kind: model.YearRange, Start: 2021, End: 2026}
 		cfg.Style = model.StyleNotice
 		cfg.ManageLicenseFile = false
+		cfg.Includes = []string{"src/**"}
 		cfg.Excludes = []string{"**/generated/**"}
 		cfg.Policy = model.Policy{
 			Required: "AGPL-3.0-or-later",
@@ -1132,6 +1170,9 @@ func TestRenderFile(t *testing.T) {
 		}
 		if got.ManageLicenseFile {
 			t.Errorf("manage_license_file should round-trip as false")
+		}
+		if len(got.Includes) != 1 || got.Includes[0] != "src/**" {
+			t.Errorf("includes = %v, want [src/**]", got.Includes)
 		}
 		if len(got.Excludes) != 1 || got.Excludes[0] != "**/generated/**" {
 			t.Errorf("excludes = %v, want [**/generated/**]", got.Excludes)

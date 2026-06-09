@@ -95,6 +95,7 @@ func Defaults() model.Config {
 		Year:              model.YearSpec{Kind: model.YearGit},
 		Style:             model.StyleReusePlusNotice,
 		ManageLicenseFile: true,
+		Includes:          nil,
 		Excludes:          nil,
 		Policy: model.Policy{
 			FailOn: []model.FailCondition{
@@ -213,6 +214,7 @@ func RenderFile(cfg model.Config) ([]byte, error) {
 		Year:              yearSpecRaw(cfg.Year),
 		Style:             cfg.Style.String(),
 		ManageLicenseFile: &cfg.ManageLicenseFile,
+		Include:           cfg.Includes,
 		Exclude:           cfg.Excludes,
 	}
 	// Only emit a policy block when the config actually carries policy intent, so a
@@ -303,6 +305,7 @@ type fileSchema struct {
 	Year              string                          `yaml:"year"`
 	Style             string                          `yaml:"style"`
 	ManageLicenseFile *bool                           `yaml:"manage_license_file"`
+	Include           []string                        `yaml:"include"`
 	Exclude           []string                        `yaml:"exclude"`
 	Policy            policySchema                    `yaml:"policy"`
 	FileTypes         map[string]fileTypeOverrideYAML `yaml:"file_types"`
@@ -368,6 +371,9 @@ func mergeSchema(cfg *model.Config, fs fileSchema) error {
 	}
 	if fs.ManageLicenseFile != nil {
 		cfg.ManageLicenseFile = *fs.ManageLicenseFile
+	}
+	if len(fs.Include) > 0 {
+		cfg.Includes = append([]string(nil), fs.Include...)
 	}
 	if len(fs.Exclude) > 0 {
 		// Excludes accumulate: a layer's excludes add to, rather than replace, the
@@ -451,6 +457,9 @@ func mergeFlags(cfg *model.Config, flags Flags) error {
 	}
 	if len(flags.Exclude) > 0 {
 		cfg.Excludes = append(cfg.Excludes, flags.Exclude...)
+	}
+	if len(flags.Include) > 0 {
+		cfg.Includes = append([]string(nil), flags.Include...)
 	}
 	return nil
 }

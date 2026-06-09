@@ -17,6 +17,7 @@ import (
 	"github.com/KofTwentyTwo/license-tool/internal/config"
 	"github.com/KofTwentyTwo/license-tool/internal/detect"
 	"github.com/KofTwentyTwo/license-tool/internal/enumerate"
+	"github.com/KofTwentyTwo/license-tool/internal/initwizard"
 	"github.com/KofTwentyTwo/license-tool/internal/model"
 	"github.com/KofTwentyTwo/license-tool/internal/report"
 	"github.com/KofTwentyTwo/license-tool/internal/resolve"
@@ -273,7 +274,7 @@ func newApplyCmd(shared *sharedFlags) *cobra.Command {
 			// for write operations, so no second check is needed here.
 			r, err := applier.Apply(path, cfg, applier.Options{
 				Write:             f.write,
-				Includes:          shared.include,
+				Includes:          cfg.Includes,
 				AllowDirty:        f.allowDirty,
 				Force:             f.force,
 				NoGitignore:       shared.noGitignore,
@@ -311,7 +312,7 @@ func newLicenseCmd(shared *sharedFlags) *cobra.Command {
 			// for write operations, so no second check is needed here.
 			results, err := applier.License(path, cfg, applier.Options{
 				Write:             f.write,
-				Includes:          shared.include,
+				Includes:          cfg.Includes,
 				AllowDirty:        f.allowDirty,
 				Force:             f.force,
 				NoGitignore:       shared.noGitignore,
@@ -439,48 +440,9 @@ func bindApplyFlags(cmd *cobra.Command, f *applyFlags) {
 }
 
 // interactiveCollect is a package-level seam over collectInteractive so tests can
-// drive the init command's non-interactive flow (and inject answers) without a real
-// terminal. Production always points at the huh-backed collectInteractive.
+// inject richer wizard answers without a real terminal. Production points at the
+// Bubble Tea collector, which no-ops when interactive is false.
 var interactiveCollect = collectInteractive
-
-// answersToConfig validates and converts collected init answers into a model.Config,
-// starting from the built-in Defaults so unset answers carry the documented default
-// behavior. WHY validation lives here, not in the wizard: the wizard is the
-// interactive shell (excluded from coverage); answersToConfig is the single tested
-// gate that both the TTY and flag-only paths funnel through, so an invalid or
-// unrenderable license and an empty holder are rejected identically regardless of
-// how the answers arrived.
-func answersToConfig(a initAnswers) (model.Config, error) {
-	if !spdx.Validate(a.License) {
-		return model.Config{}, fmt.Errorf("init: %q is not a recognized SPDX license identifier", a.License)
-	}
-	if _, ok := spdx.Lookup(a.License); !ok {
-		return model.Config{}, fmt.Errorf("init: %q is a recognized SPDX license identifier, but license-tool cannot render it", a.License)
-	}
-	if a.Holder == "" {
-		return model.Config{}, fmt.Errorf("init: copyright holder is required")
-	}
-	cfg := config.Defaults()
-	cfg.License = a.License
-	cfg.Holder = a.Holder
-	if a.Year != "" {
-		ys, err := config.ParseYearSpec(a.Year)
-		if err != nil {
-			return model.Config{}, err
-		}
-		cfg.Year = ys
-	}
-	if a.Style != "" {
-		st, err := config.ParseStyle(a.Style)
-		if err != nil {
-			return model.Config{}, err
-		}
-		cfg.Style = st
-	}
-	cfg.ManageLicenseFile = a.ManageLicenseFile
-	cfg.Excludes = a.Excludes
-	return cfg, nil
-}
 
 func newInitCmd(shared *sharedFlags) *cobra.Command {
 	f := &applyFlags{}
@@ -491,18 +453,21 @@ func newInitCmd(shared *sharedFlags) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := argPath(args)
 			out := cmd.OutOrStdout()
-			a := initAnswers{
-				License:           f.license,
-				Holder:            f.holder,
-				Year:              f.year,
-				Style:             f.style,
-				ManageLicenseFile: true,
-				Excludes:          shared.exclude,
+			a := initwizard.Answers{
+				License:      initwizard.LicenseAnswer{SPDXID: f.license},
+				Identity:     initwizard.IdentityAnswer{Holder: f.holder, Year: f.year},
+				HeaderStyle:  initwizard.HeaderStyleAnswer{Style: f.style},
+				LicenseFiles: initwizard.LicenseFilesAnswer{Manage: true},
+				Coverage: initwizard.CoverageAnswer{
+					Include: shared.include,
+					Exclude: shared.exclude,
+				},
 			}
-			if err := interactiveCollect(&a, isTTY()); err != nil {
+			a, err := interactiveCollect(path, a, isTTY())
+			if err != nil {
 				return usageError(err)
 			}
-			cfg, err := answersToConfig(a)
+			cfg, err := initwizard.Translate(a, initwizard.TranslateOptions{})
 			if err != nil {
 				return usageError(err)
 			}
@@ -549,7 +514,7 @@ func buildAuditPipeline(cfg model.Config, shared *sharedFlags) report.Pipeline {
 	return report.Pipeline{
 		Enumerate: func(root string, excludes []string) ([]report.SourceFile, error) {
 			entries, err := enumerate.WithContent(root, enumerate.Options{
-				Includes:    shared.include,
+				Includes:    cfg.Includes,
 				Excludes:    excludes,
 				NoGitignore: shared.noGitignore,
 			}, classify)

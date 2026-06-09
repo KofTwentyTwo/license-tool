@@ -16,6 +16,7 @@ import (
 
 	"github.com/KofTwentyTwo/license-tool/internal/config"
 	"github.com/KofTwentyTwo/license-tool/internal/enumerate"
+	"github.com/KofTwentyTwo/license-tool/internal/initwizard"
 	"github.com/KofTwentyTwo/license-tool/internal/model"
 	"github.com/KofTwentyTwo/license-tool/internal/report"
 	"github.com/KofTwentyTwo/license-tool/internal/spdx"
@@ -351,6 +352,30 @@ func TestAuditCommand(t *testing.T) {
 		out, err := runRoot(t, "audit", dir, "--format", "markdown", "--deps=false")
 		require.NoError(t, err)
 		assert.Contains(t, out, "# license-tool audit report")
+	})
+
+	t.Run("config include scopes source enumeration", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML+"include: [\"included.go\"]\n")
+		writeFile(t, dir, "included.go", "package included\n")
+		writeFile(t, dir, "excluded.go", "package excluded\n")
+
+		out, err := runRoot(t, "audit", dir, "--deps=false")
+		require.NoError(t, err)
+		assert.Contains(t, out, "included.go")
+		assert.NotContains(t, out, "excluded.go")
+	})
+
+	t.Run("flag include overrides config include", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML+"include: [\"repo.go\"]\n")
+		writeFile(t, dir, "repo.go", "package repo\n")
+		writeFile(t, dir, "flag.go", "package flag\n")
+
+		out, err := runRoot(t, "audit", dir, "--include", "flag.go", "--deps=false")
+		require.NoError(t, err)
+		assert.Contains(t, out, "flag.go")
+		assert.NotContains(t, out, "repo.go")
 	})
 
 	t.Run("default path resolves to dot", func(t *testing.T) {
@@ -804,6 +829,25 @@ func TestApplyCommand(t *testing.T) {
 		assert.NotContains(t, string(ignored), "SPDX-License-Identifier")
 	})
 
+	t.Run("write honors config include scope", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configNoManagedYAML+"include: [\"included.go\"]\n")
+		writeFile(t, dir, "included.go", "package included\n")
+		writeFile(t, dir, "ignored.go", "package ignored\n")
+		initGitRepo(t, dir)
+
+		_, err := runRoot(t, "apply", dir, "--write")
+		require.NoError(t, err)
+
+		included, rerr := os.ReadFile(filepath.Join(dir, "included.go"))
+		require.NoError(t, rerr)
+		assert.Contains(t, string(included), "SPDX-License-Identifier: AGPL-3.0-or-later")
+
+		ignored, rerr := os.ReadFile(filepath.Join(dir, "ignored.go"))
+		require.NoError(t, rerr)
+		assert.NotContains(t, string(ignored), "SPDX-License-Identifier")
+	})
+
 	t.Run("allow-dirty commit leaves unrelated changes uncommitted", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, ".license-tool.yaml", configNoManagedYAML)
@@ -946,9 +990,9 @@ func TestInitCommand(t *testing.T) {
 
 	t.Run("flags scaffold config file", func(t *testing.T) {
 		// Non-TTY stdin (forced by isolateEnv) skips the wizard, so init scaffolds a
-		// .license-tool.yaml purely from the --license/--holder flags.
+		// .license-tool.yaml purely from flags.
 		dir := t.TempDir()
-		out, err := runRoot(t, "init", dir, "--license", "MIT", "--holder", "Acme")
+		out, err := runRoot(t, "init", dir, "--license", "MIT", "--holder", "Acme", "--include", "src/**", "--exclude", "vendor/**")
 		require.NoError(t, err)
 		target := filepath.Join(dir, ".license-tool.yaml")
 		assert.Contains(t, out, "wrote "+target)
@@ -957,6 +1001,8 @@ func TestInitCommand(t *testing.T) {
 		require.NoError(t, lerr)
 		assert.Equal(t, "MIT", cfg.License)
 		assert.Equal(t, "Acme", cfg.Holder)
+		assert.Equal(t, []string{"src/**"}, cfg.Includes)
+		assert.Equal(t, []string{"vendor/**"}, cfg.Excludes)
 	})
 
 	t.Run("missing license errors", func(t *testing.T) {
@@ -992,66 +1038,6 @@ func TestInitCommand(t *testing.T) {
 		cfg, lerr := config.LoadFile(filepath.Join(dir, ".license-tool.yaml"))
 		require.NoError(t, lerr)
 		assert.Equal(t, "Apache-2.0", cfg.License)
-	})
-}
-
-// TestAnswersToConfig drives the single tested gate that both the TTY wizard and
-// the flag-only path funnel through: the valid case plus each rejection (unknown
-// license, empty holder, bad year, bad style). WHY exhaustive here: the wizard shell
-// is excluded from coverage, so this is the only place the validation/parse arms are
-// exercised, and they must reject identically regardless of how answers arrived.
-func TestAnswersToConfig(t *testing.T) {
-	t.Run("valid answers build a config from defaults", func(t *testing.T) {
-		cfg, err := answersToConfig(initAnswers{
-			License:           "MIT",
-			Holder:            "Acme, LLC",
-			Year:              "2021-2026",
-			Style:             "reuse",
-			ManageLicenseFile: false,
-			Excludes:          []string{"**/vendor/**"},
-		})
-		require.NoError(t, err)
-		assert.Equal(t, "MIT", cfg.License)
-		assert.Equal(t, "Acme, LLC", cfg.Holder)
-		assert.Equal(t, model.YearRange, cfg.Year.Kind)
-		assert.Equal(t, 2021, cfg.Year.Start)
-		assert.Equal(t, 2026, cfg.Year.End)
-		assert.Equal(t, model.StyleReuse, cfg.Style)
-		assert.False(t, cfg.ManageLicenseFile)
-		assert.Equal(t, []string{"**/vendor/**"}, cfg.Excludes)
-	})
-
-	t.Run("empty year and style keep the built-in defaults", func(t *testing.T) {
-		// Unset year/style answers must leave the Defaults() values untouched, so the
-		// year/style parse branches are skipped (not defaulted to a parse of "").
-		cfg, err := answersToConfig(initAnswers{License: "MIT", Holder: "Acme"})
-		require.NoError(t, err)
-		assert.Equal(t, model.YearGit, cfg.Year.Kind)
-		assert.Equal(t, model.StyleReusePlusNotice, cfg.Style)
-	})
-
-	t.Run("unknown license rejected", func(t *testing.T) {
-		_, err := answersToConfig(initAnswers{License: "NOT-A-LICENSE", Holder: "Acme"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not a recognized SPDX license identifier")
-	})
-
-	t.Run("empty holder rejected", func(t *testing.T) {
-		_, err := answersToConfig(initAnswers{License: "MIT", Holder: ""})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "copyright holder is required")
-	})
-
-	t.Run("bad year rejected", func(t *testing.T) {
-		_, err := answersToConfig(initAnswers{License: "MIT", Holder: "Acme", Year: "not-a-year"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "year")
-	})
-
-	t.Run("bad style rejected", func(t *testing.T) {
-		_, err := answersToConfig(initAnswers{License: "MIT", Holder: "Acme", Style: "fancy"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unknown style")
 	})
 }
 
@@ -1164,28 +1150,19 @@ func TestAuditSortAndUnknownSort(t *testing.T) {
 	assert.Contains(t, stderr, "unknown sort")
 }
 
-func TestLicenseSelectOptions(t *testing.T) {
-	opts := licenseSelectOptions()
-	require.NotEmpty(t, opts, "license picker should offer renderable licenses")
-
-	values := make([]string, 0, len(opts))
-	for _, opt := range opts {
-		values = append(values, opt.Value)
-	}
-	assert.Contains(t, values, "MIT")
-	assert.NotContains(t, values, "Zlib", "picker must not offer a license the tool cannot render")
-}
 
 // TestInitCommandInteractiveCollectError covers the init RunE branch where the
 // interactiveCollect seam returns an error: the command must propagate it verbatim
 // and write nothing. The seam is overridden so the failure is deterministic without
-// a real terminal (the huh wizard itself is excluded from coverage).
+// a real terminal (the Bubble Tea wizard itself is excluded from coverage).
 func TestInitCommandInteractiveCollectError(t *testing.T) {
 	isolateEnv(t)
 
 	orig := interactiveCollect
 	wantErr := errors.New("wizard aborted")
-	interactiveCollect = func(_ *initAnswers, _ bool) error { return wantErr }
+	interactiveCollect = func(_ string, a initwizard.Answers, _ bool) (initwizard.Answers, error) {
+		return a, wantErr
+	}
 	t.Cleanup(func() { interactiveCollect = orig })
 
 	dir := t.TempDir()
@@ -1195,6 +1172,63 @@ func TestInitCommandInteractiveCollectError(t *testing.T) {
 	// The collect failure must abort before any file is written.
 	_, statErr := os.Stat(filepath.Join(dir, ".license-tool.yaml"))
 	assert.True(t, os.IsNotExist(statErr), "no config should be written when collect fails")
+}
+
+func TestInitCommandConsumesCollectorAnswers(t *testing.T) {
+	isolateEnv(t)
+
+	orig := interactiveCollect
+	t.Cleanup(func() { interactiveCollect = orig })
+
+	dir := t.TempDir()
+	interactiveCollect = func(path string, initial initwizard.Answers, interactive bool) (initwizard.Answers, error) {
+		assert.Equal(t, dir, path)
+		assert.False(t, interactive)
+		assert.Equal(t, "MIT", initial.License.SPDXID)
+		assert.Equal(t, "Flag Holder", initial.Identity.Holder)
+		assert.Equal(t, "2026", initial.Identity.Year)
+		assert.Equal(t, "reuse", initial.HeaderStyle.Style)
+		assert.Equal(t, []string{"src/**"}, initial.Coverage.Include)
+		assert.Equal(t, []string{"vendor/**"}, initial.Coverage.Exclude)
+
+		return initwizard.Answers{
+			License: initwizard.LicenseAnswer{
+				SPDXID: "Apache-2.0",
+			},
+			Identity: initwizard.IdentityAnswer{
+				Holder: "Wizard Holder",
+				Year:   "current",
+			},
+			HeaderStyle:  initwizard.HeaderStyleAnswer{Style: "notice"},
+			LicenseFiles: initwizard.LicenseFilesAnswer{Manage: false},
+			Coverage: initwizard.CoverageAnswer{
+				Include: []string{"cmd/**"},
+				Exclude: []string{"generated/**"},
+			},
+		}, nil
+	}
+
+	out, err := runRoot(t, "init", dir,
+		"--license", "MIT",
+		"--holder", "Flag Holder",
+		"--year", "2026",
+		"--style", "reuse",
+		"--include", "src/**",
+		"--exclude", "vendor/**",
+	)
+	require.NoError(t, err)
+
+	target := filepath.Join(dir, ".license-tool.yaml")
+	assert.Contains(t, out, "wrote "+target)
+	cfg, err := config.LoadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "Apache-2.0", cfg.License)
+	assert.Equal(t, "Wizard Holder", cfg.Holder)
+	assert.Equal(t, model.YearCurrent, cfg.Year.Kind)
+	assert.Equal(t, model.StyleNotice, cfg.Style)
+	assert.False(t, cfg.ManageLicenseFile)
+	assert.Equal(t, []string{"cmd/**"}, cfg.Includes)
+	assert.Equal(t, []string{"generated/**"}, cfg.Excludes)
 }
 
 func TestSharedToFlags(t *testing.T) {
