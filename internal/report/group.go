@@ -164,10 +164,17 @@ type Group struct {
 func GroupFiles(r model.Report, spec GroupSpec) (groups []Group, skipped int) {
 	// Repo-level hard incompatibilities are not attributed to any single file, so a
 	// group's risk would otherwise be blind to them (an Apache group beside AGPL would
-	// read "low"). Compute the set of repo licenses party to a curated incompatibility
-	// once, and use it to make per-group risk policy-aware.
-	incompatIDs := incompatibleIDs(distinctSourceIDs(r.Files))
+	// read "low"). Derive the incompatibility set from r's own files; callers that have
+	// narrowed r for the listing (e.g. --only) must use groupFilesWith with the full
+	// repo's set so the risk marker is not distorted by the filter.
+	return groupFilesWith(r, spec, incompatibleIDs(distinctSourceIDs(r.Files)))
+}
 
+// groupFilesWith is GroupFiles with an explicit repo-wide incompatibility set. The set
+// must be computed over the full repo's distinct source ids (not a --only-narrowed
+// listing), so a group's policy-aware risk reflects repo-level incompatibilities even
+// when r.Files has been filtered down to the files actually being listed.
+func groupFilesWith(r model.Report, spec GroupSpec, incompatIDs map[string]bool) (groups []Group, skipped int) {
 	buckets := map[string][]model.FileResult{}
 	for _, fr := range r.Files {
 		if fr.Skipped {

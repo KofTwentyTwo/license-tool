@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -567,7 +568,7 @@ func buildAuditPipeline(cfg model.Config, shared *sharedFlags) report.Pipeline {
 				// never carries a managed header, so counting it would inflate
 				// sourceTotal/sourceMissing. Mark it skipped (still listed, with a reason)
 				// rather than counting it as a headerless source file.
-				if !sf.Skip && filepath.Base(e.Path) == config.RepoConfigName {
+				if !sf.Skip && path.Base(e.Path) == config.RepoConfigName {
 					sf.Skip = true
 					sf.SkipReason = reasonToolConfig
 				}

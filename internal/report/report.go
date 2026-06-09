@@ -535,10 +535,14 @@ func renderText(w io.Writer, r model.Report, opts RenderOptions) error {
 
 	// Source-file listing: flat by default, grouped under --group-by, omitted under
 	// --summary (a bare --summary with no group-by shows only the rollups above).
+	// Incompatibility risk is repo-wide, so derive it from the full report before
+	// --only narrows the listing; otherwise a filtered listing would understate a
+	// group's policy-aware risk.
+	incompatIDs := incompatibleIDs(distinctSourceIDs(r.Files))
 	lr := opts.listingReport(r)
 	switch {
 	case opts.GroupBy != GroupNone:
-		renderGroupedFiles(bw, lr, opts)
+		renderGroupedFiles(bw, lr, opts, incompatIDs)
 	case !opts.Summary:
 		bw.printf("source files: %d\n", len(lr.Files))
 		for _, fr := range sortedFiles(lr.Files) {
@@ -629,8 +633,8 @@ func percent(n, total int) string {
 // renderGroupedFiles prints the source files grouped under opts.GroupBy. Under
 // --summary it prints per-group counts only; otherwise it nests the file lines. A
 // trailing note reports skipped (uneditable) files, which are never grouped.
-func renderGroupedFiles(bw *errWriter, r model.Report, opts RenderOptions) {
-	groups, skipped := GroupFiles(r, opts.spec())
+func renderGroupedFiles(bw *errWriter, r model.Report, opts RenderOptions, incompatIDs map[string]bool) {
+	groups, skipped := groupFilesWith(r, opts.spec(), incompatIDs)
 	sortGroups(groups, opts.SortByCount)
 	bw.printf("source files by %s:\n", opts.GroupBy)
 	if len(groups) == 0 {
@@ -714,10 +718,11 @@ func renderMarkdown(w io.Writer, r model.Report, opts RenderOptions) error {
 	renderMarkdownCountTable(bw, "By category", "Category", r.CategoryCounts, opts.SortByCount)
 	renderMarkdownCountTable(bw, "By file type", "File type", r.FileTypeCounts, opts.SortByCount)
 
+	incompatIDs := incompatibleIDs(distinctSourceIDs(r.Files))
 	lr := opts.listingReport(r)
 	switch {
 	case opts.GroupBy != GroupNone:
-		renderMarkdownGroups(bw, lr, opts)
+		renderMarkdownGroups(bw, lr, opts, incompatIDs)
 	case !opts.Summary:
 		bw.printf("## Source files (%d)\n\n", len(lr.Files))
 		bw.printf("| Path | File type | Status |\n| --- | --- | --- |\n")
@@ -793,8 +798,8 @@ func renderMarkdownCountTable(bw *errWriter, heading, keyHeader string, counts m
 
 // renderMarkdownGroups renders the grouped source-file view. Under --summary it emits
 // a single per-group count table; otherwise a per-group heading with a file table.
-func renderMarkdownGroups(bw *errWriter, r model.Report, opts RenderOptions) {
-	groups, skipped := GroupFiles(r, opts.spec())
+func renderMarkdownGroups(bw *errWriter, r model.Report, opts RenderOptions, incompatIDs map[string]bool) {
+	groups, skipped := groupFilesWith(r, opts.spec(), incompatIDs)
 	sortGroups(groups, opts.SortByCount)
 	bw.printf("## Source files by %s\n\n", opts.GroupBy)
 
@@ -938,10 +943,11 @@ func renderJSON(w io.Writer, r model.Report, opts RenderOptions) error {
 	// Map keys are marshaled in sorted order by encoding/json, and every slice is
 	// pre-sorted, so the emitted JSON is byte-stable for identical reports.
 
+	incompatIDs := incompatibleIDs(distinctSourceIDs(r.Files))
 	lr := opts.listingReport(r)
 	var groups []jsonGroup
 	if opts.GroupBy != GroupNone {
-		groups = buildJSONGroups(lr, opts)
+		groups = buildJSONGroups(lr, opts, incompatIDs)
 	}
 	details := toJSONViolations(r.ViolationDetails)
 	findings := toJSONFindings(buildFindings(r))
@@ -979,8 +985,8 @@ func renderJSON(w io.Writer, r model.Report, opts RenderOptions) error {
 
 // buildJSONGroups builds the machine grouping for opts.GroupBy. File detail is
 // included unless --summary asks for counts only.
-func buildJSONGroups(r model.Report, opts RenderOptions) []jsonGroup {
-	groups, _ := GroupFiles(r, opts.spec())
+func buildJSONGroups(r model.Report, opts RenderOptions, incompatIDs map[string]bool) []jsonGroup {
+	groups, _ := groupFilesWith(r, opts.spec(), incompatIDs)
 	sortGroups(groups, opts.SortByCount)
 	out := make([]jsonGroup, 0, len(groups))
 	for _, g := range groups {

@@ -288,6 +288,41 @@ func TestAuditCommand(t *testing.T) {
 		entry := jsonFileEntry(t, out, ".license-tool.yaml")
 		assert.Equal(t, true, entry["skipped"], ".license-tool.yaml should be skipped, not counted as source")
 		assert.Equal(t, "tool config", entry["skipReason"])
+		// Detection and policy never run on the skipped config, so its declared license
+		// does not leak into the report as a detected header or a violation.
+		assert.Equal(t, false, entry["hasHeader"], "no header is detected on the skipped config")
+		assert.NotContains(t, entry, "spdxId", "the config's declared license must not surface as a detected id")
+		assert.NotContains(t, entry, "violations", "the skipped config carries no policy violations")
+	})
+
+	t.Run("tool config is excluded when nested and under --only", func(t *testing.T) {
+		// Basename match excludes the config at any depth, and a headerless config must
+		// never leak into the --only=missing problem list.
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML)
+		writeFile(t, dir, filepath.Join("sub", ".license-tool.yaml"), configYAML)
+		writeFile(t, dir, "main.go", "package main\n\nfunc main() {}\n")
+
+		out, err := runRoot(t, "audit", dir, "--format", "json", "--deps=false", "--only", "missing")
+		require.NoError(t, err)
+
+		var got struct {
+			Findings struct {
+				SourceTotal int `json:"sourceTotal"`
+			} `json:"findings"`
+			Files []map[string]any `json:"files"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(out), &got))
+		assert.Equal(t, 1, got.Findings.SourceTotal, "both root and nested config are excluded; only main.go counts")
+
+		// The --only=missing listing lists the headerless main.go but neither config.
+		listed := map[string]bool{}
+		for _, f := range got.Files {
+			listed[f["path"].(string)] = true
+		}
+		assert.True(t, listed["main.go"], "the headerless main.go is a missing-header problem file")
+		assert.False(t, listed[".license-tool.yaml"], "the root config must not appear in --only=missing")
+		assert.False(t, listed[filepath.ToSlash(filepath.Join("sub", ".license-tool.yaml"))], "the nested config must not appear in --only=missing")
 	})
 
 	t.Run("output file", func(t *testing.T) {
@@ -475,6 +510,18 @@ func TestCheckCommand(t *testing.T) {
 		writeFile(t, dir, "main.go", "package main\n")
 		_, err := runRoot(t, "check", dir, "--deps=false")
 		require.NoError(t, err)
+	})
+
+	t.Run("tool config does not trigger a missing-header check failure", func(t *testing.T) {
+		// The config is headerless YAML; under the default fail_on (which includes
+		// missing-header) it would fail check if counted as source. Excluding it lets a
+		// repo whose only other file is properly headered pass. This guards the audit
+		// pipeline's config exclusion against regression on the check exit code.
+		dir := t.TempDir()
+		writeFile(t, dir, ".license-tool.yaml", configYAML)
+		writeFile(t, dir, "main.go", "/* SPDX-License-Identifier: AGPL-3.0-or-later */\n\npackage main\n")
+		_, err := runRoot(t, "check", dir, "--deps=false")
+		require.NoError(t, err, "the tool's own config must not cause a missing-header check failure")
 	})
 
 	t.Run("fail-on flag overrides check policy", func(t *testing.T) {

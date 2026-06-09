@@ -88,7 +88,8 @@ a check failed, not just that it did. Rollups show per-row percentages and total
 
 The tool's own `.license-tool.yaml` is treated as metadata, not coverable source: it
 is listed as skipped (reason `tool config`) and never counted toward source-header
-coverage, so it cannot inflate the missing-header tally.
+coverage, so it cannot inflate the missing-header tally — and `check` no longer fails
+on the config for lacking a header.
 
 Audit output is read-only. Audit always prints a "not legal advice" disclaimer.
 Text output starts with a `findings:` summary that calls out source-file header
@@ -111,32 +112,34 @@ the gaps are:
 
 ```text
 source files by license:
-  (none) (1)
+  (no-header) (1) [risk: unknown]
     src/legacy.go  [no managed header]
-  AGPL-3.0-or-later (2)
+  AGPL-3.0-or-later (2) [risk: high]
     src/a.go  [AGPL-3.0-or-later]
     src/b.go  [AGPL-3.0-or-later]
-  Apache-2.0 (1)
-    scripts/run.sh  [Apache-2.0]
-  MIT (2)
+  MIT (2) [risk: low]
     web/c.ts  [MIT]
     web/d.ts  [MIT]
   (skipped: 6)
 ```
 
 For a tree-shaped view of coverage, `audit --summary --group-by directory` answers
-"which parts of the repo are licensed" at a glance, with no per-file noise:
+"which parts of the repo are licensed" at a glance, with no per-file noise. Each
+directory carries its worst risk and its license breakdown, so the grouping is not
+license-blind:
 
 ```text
 source files by directory:
-  scripts (1)
-  src (3)
-  web (2)
+  src (3) [risk: high]
+    licenses: (no-header) 1, AGPL-3.0-or-later 2
+  web (2) [risk: low]
+    licenses: MIT 2
   (skipped: 6)
 ```
 
 And `audit --group-by license --format json` emits the same grouping as machine data
-(a `groups` array of `{key, count, files}`) for dashboards and CI summaries.
+(a `groups` array of `{key, count, risk, licenses, files}`) for dashboards and CI
+summaries.
 
 Dependency audit discovers manifests in the root and in subdirectories, while
 honoring git, `.gitignore`, configured excludes, and common vendor-heavy

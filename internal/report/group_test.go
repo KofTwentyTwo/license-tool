@@ -152,6 +152,23 @@ func TestGroupRiskEscalatesOnRepoIncompatibility(t *testing.T) {
 	assert.Equal(t, "high", groupByKey(t, groups, "AGPL-3.0-or-later").Risk)
 }
 
+func TestGroupFilesWithRepoWideIncompatibility(t *testing.T) {
+	// The listing has been narrowed to just the Apache file (its AGPL partner filtered
+	// out of Files, e.g. by --only), but the repo-wide incompatibility set still names
+	// both. The Apache group must still escalate to "high": a narrowed listing must not
+	// distort the policy-aware risk marker (the rollup-distortion contract of --only).
+	r := model.Report{Files: []model.FileResult{headered("a/x.go", "Go", "Apache-2.0")}}
+	full := map[string]bool{"Apache-2.0": true, "AGPL-3.0-or-later": true}
+	groups, _ := groupFilesWith(r, GroupSpec{By: GroupLicense}, full)
+	assert.Equal(t, "high", groupByKey(t, groups, "Apache-2.0").Risk)
+
+	// Control: with an empty repo-wide set (what the filtered listing alone would
+	// yield), Apache reads its category risk "low" -- proving the passed-in set is what
+	// drives escalation, not the listing's own ids.
+	groups2, _ := groupFilesWith(r, GroupSpec{By: GroupLicense}, map[string]bool{})
+	assert.Equal(t, "low", groupByKey(t, groups2, "Apache-2.0").Risk)
+}
+
 func TestGroupRiskEscalatesOnFileScopedPolicyViolation(t *testing.T) {
 	// A permissive license carrying a file-scoped policy violation (e.g. deny-listed)
 	// must escalate its group to "high" rather than reading its category risk "low".
@@ -160,6 +177,59 @@ func TestGroupRiskEscalatesOnFileScopedPolicyViolation(t *testing.T) {
 	r := model.Report{Files: []model.FileResult{denied}}
 	groups, _ := GroupFiles(r, GroupSpec{By: GroupLicense})
 	assert.Equal(t, "high", groupByKey(t, groups, "MIT").Risk)
+}
+
+func TestGroupRiskDirectoryEscalatesMixedGroup(t *testing.T) {
+	// The headline case for policy-aware risk: a non-license grouping where one bad
+	// file taints the bucket. pkg/ mixes an Apache file (party to a repo incompatibility
+	// with the AGPL in lib/) with an innocent MIT file; both are category-low, yet pkg/
+	// must read "high". A sibling directory of only MIT stays "low".
+	r := model.Report{Files: []model.FileResult{
+		headered("pkg/a.go", "Go", "Apache-2.0"),
+		headered("pkg/b.go", "Go", "MIT"),
+		headered("other/c.go", "Go", "MIT"),
+		headered("lib/d.go", "Go", "AGPL-3.0-or-later"),
+	}}
+	groups, _ := GroupFiles(r, GroupSpec{By: GroupDirectory})
+	assert.Equal(t, "high", groupByKey(t, groups, "pkg").Risk)
+	assert.Equal(t, "low", groupByKey(t, groups, "other").Risk)
+	assert.Equal(t, "high", groupByKey(t, groups, "lib").Risk) // AGPL: category high and incompatible
+}
+
+func TestGroupRiskIncompatBeatsHeaderlessUnknown(t *testing.T) {
+	// A group with an incompatible-license file AND a headerless file escalates to
+	// "high" (policy concern), not the headerless "unknown" fallback.
+	r := model.Report{Files: []model.FileResult{
+		headered("pkg/a.go", "Go", "Apache-2.0"),
+		{Path: "pkg/b.go", FileType: "Go"}, // headerless
+		headered("lib/c.go", "Go", "AGPL-3.0-or-later"),
+	}}
+	groups, _ := GroupFiles(r, GroupSpec{By: GroupDirectory})
+	assert.Equal(t, "high", groupByKey(t, groups, "pkg").Risk)
+}
+
+func TestGroupRiskNonPolicyViolationTokenDoesNotEscalate(t *testing.T) {
+	// missing-header / unknown-license tokens are not policy escalations: a permissive
+	// group carrying only such a token keeps its category risk ("low"), not "high".
+	fr := headered("a/x.go", "Go", "MIT")
+	fr.Violations = []string{model.FailOnUnknownLicense.String()}
+	r := model.Report{Files: []model.FileResult{fr}}
+	groups, _ := GroupFiles(r, GroupSpec{By: GroupLicense})
+	assert.Equal(t, "low", groupByKey(t, groups, "MIT").Risk)
+}
+
+func TestIncompatibleIDs(t *testing.T) {
+	// Three ids where exactly one pair (AGPL x Apache) is a curated hard incompatibility:
+	// both are flagged, the innocent MIT is not.
+	got := incompatibleIDs([]string{"AGPL-3.0-or-later", "Apache-2.0", "MIT"})
+	assert.True(t, got["AGPL-3.0-or-later"])
+	assert.True(t, got["Apache-2.0"])
+	assert.False(t, got["MIT"])
+
+	// No incompatible pair, a single id, and the empty set all yield an empty result.
+	assert.Empty(t, incompatibleIDs([]string{"MIT", "Apache-2.0"}))
+	assert.Empty(t, incompatibleIDs([]string{"Apache-2.0"}))
+	assert.Empty(t, incompatibleIDs(nil))
 }
 
 func TestLicenseBreakdown(t *testing.T) {

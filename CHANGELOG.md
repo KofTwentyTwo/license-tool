@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Renamed the headerless source-file bucket label to `(no-header)`.
 
 ### Fixed
-- Excluded the tool's own `.license-tool.yaml` from source-header coverage (it is listed as skipped with reason `tool config`), so it no longer inflates the source-file and missing-header counts.
+- Excluded the tool's own `.license-tool.yaml` from source-header coverage (it is listed as skipped with reason `tool config`), so it no longer inflates the source-file and missing-header counts and `check` no longer fails on it for lacking a header.
+- Made per-group risk reflect the full repo's incompatibilities under `--only`: the risk marker is now derived from the whole report, so narrowing the listing no longer understates a group's risk.
 
 ## [0.3.0] - 2026-06-04
 
