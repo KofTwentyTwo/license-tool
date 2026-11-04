@@ -57,7 +57,7 @@ release:
   prerelease: auto
 
 changelog:
-  use: github
+  use: gitea
 
 homebrew_casks:
   - name: license-tool
@@ -80,3 +80,9 @@ homebrew_casks:
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/license-tool"]
           end
+
+# Primary forge changelog/download URLs; the read-only build skips all publishing.
+gitea_urls:
+  api: https://git.kof22.com/api/v1
+  download: https://git.kof22.com
+  skip_tls_verify: false
