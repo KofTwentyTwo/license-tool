@@ -11,7 +11,7 @@ jobs:
   build:
     needs: [names]
     if: ${{ needs.names.outputs.eligible == 'true' }}
-    uses: self:KofTwentyTwo/platform-ci/.gitea/workflows/go.yaml@ef28f955d3a47389d0608509109ced9b1abd30b9
+    uses: self:KofTwentyTwo/platform-ci/.gitea/workflows/go.yaml@kof-release-v1
     with:
       runner: linux-small
       coverage: config
