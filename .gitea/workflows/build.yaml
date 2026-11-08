@@ -1,0 +1,20 @@
+name: build
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+jobs:
+  go:
+    uses: self:KofTwentyTwo/ci-workflows/.gitea/workflows/go.yaml@small-workflows
+    secrets: inherit
+    with:
+      go-version: '1.26'
+      golangci-lint: true
+      race: true
+      test-args: -coverpkg=./internal/...,./cmd/... -covermode=atomic -coverprofile=cover.out
+      # 100% coverage gate (.testcoverage.yml), then the plain build.
+      commands: |
+        go run github.com/vladopajic/go-test-coverage/v2@v2.18.8 --config=.testcoverage.yml
+        go build ./...
+      release-commands: scripts/build-release.sh "${GITHUB_REF_NAME#v}"
+      artifacts: dist/*
