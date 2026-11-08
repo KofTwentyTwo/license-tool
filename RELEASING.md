@@ -4,7 +4,10 @@
 > conflict resolution, tagging, and post-release verification) see [RELEASES.md](./RELEASES.md).
 > This file is the short reference.
 
-Releases are built with [GoReleaser](https://goreleaser.com) and published by GitHub Actions.
+CI and releases run on Gitea Actions (`.gitea/workflows/build.yaml`, the shared
+`KofTwentyTwo/ci-workflows` Go workflow). A `v*` tag runs every gate, then
+`scripts/build-release.sh` builds the archives and CI attaches them with a `SHA256SUMS`
+to the tag's Gitea release. `.goreleaser.yaml` remains for local snapshot checks.
 
 ## Changelog Management
 
@@ -72,8 +75,8 @@ git tag vX.Y.Z-rc.N
 git push origin vX.Y.Z-rc.N
 ```
 
-The `Release` workflow builds all configured target binaries and creates a GitHub prerelease
-(the `release.prerelease: auto` setting marks any tag with a prerelease suffix as a prerelease).
+The tag build creates a Gitea prerelease (any tag with a `-` suffix) with the archives and
+`SHA256SUMS`.
 
 ## Production Release
 
@@ -86,7 +89,7 @@ From `main`:
    git commit -am "docs: changelog for v$VERSION"
    ```
 
-3. Push `main` and wait for CI and CodeQL to pass on the release commit.
+3. Push `main` and wait for CI to pass on the release commit.
 4. Tag and push. Prefer a signed annotated tag:
 
    ```bash
@@ -94,41 +97,10 @@ From `main`:
    git push origin vX.Y.Z
    ```
 
-The `Release` workflow runs `goreleaser release --clean`, which cross-compiles the
-mac/linux arm64+amd64 and windows amd64 binaries, builds the archives and `checksums.txt`,
-creates the GitHub Release, and publishes the Homebrew cask to:
+The tag build runs every CI gate, then `scripts/build-release.sh <version>` cross-compiles the
+mac/linux arm64+amd64 and windows amd64 binaries into `dist/` archives, and CI attaches them
+and a `SHA256SUMS` to the tag's Gitea release.
 
-```text
-KofTwentyTwo/homebrew-tap
-```
+The Homebrew cask in `KofTwentyTwo/homebrew-tap` is not updated by CI; update it by hand from
+the release's `SHA256SUMS` until the tap has its own workflow.
 
-End users install with:
-
-```bash
-brew install --cask KofTwentyTwo/tap/license-tool
-```
-
-## Required GitHub Setup
-
-Create or verify a public Homebrew tap repository:
-
-```text
-KofTwentyTwo/homebrew-tap
-```
-
-Add a repository Actions secret on `KofTwentyTwo/license-tool` named:
-
-```text
-HOMEBREW_TAP_TOKEN
-```
-
-The token needs contents write access to `KofTwentyTwo/homebrew-tap`, because the release
-workflow checks out that repository and commits cask updates. Do not hardcode this token
-in workflow files.
-
-Before the first production release:
-
-- Protect or manage the `main` and `develop` branches according to the branch flow above.
-- Confirm `HOMEBREW_TAP_TOKEN` can write to `KofTwentyTwo/homebrew-tap`.
-- Confirm the local push path works with `git ls-remote --heads origin`.
-- Re-run `goreleaser check` and `goreleaser release --snapshot --clean`.

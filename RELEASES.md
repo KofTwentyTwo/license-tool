@@ -5,8 +5,8 @@ on [RELEASING.md](./RELEASING.md) (which is the short reference) with the comple
 process: integrating feature work, choosing a version, running the gate, tagging, and
 verifying the published artifacts.
 
-Releases are built by [GoReleaser](https://goreleaser.com) and published by the
-`Release` GitHub Actions workflow. There is **no version constant in source** — the
+Releases are built by `scripts/build-release.sh` and published to the Gitea release by
+the tag build of `.gitea/workflows/build.yaml` (see RELEASING.md). There is **no version constant in source** — the
 version is injected at build time via `-ldflags` (`main.version`, `main.commit`,
 `main.date`) when the workflow runs against a pushed tag.
 
